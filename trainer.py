@@ -7,6 +7,7 @@ from datasets import load_dataset
 from typing import Optional, Dict, Any
 import logging
 import os
+import shutil
 from orbax import checkpoint as ocp
 from config import TrainingConfig, DataConfig, ModelConfig
 from model import ProductionTransformer
@@ -95,14 +96,12 @@ class Trainer:
             raise ValueError("No trained state to save")
         # Remove existing checkpoint directory if it exists
         if os.path.exists(path):
-            import shutil
             shutil.rmtree(path)
-        os.makedirs(path, exist_ok=True)
-        checkpointer = ocp.StandardCheckpointer()
+        checkpointer = ocp.PyTreeCheckpointer()
         checkpointer.save(path, self.state.params)
 
     def load_checkpoint(self, path: str):
-        checkpointer = ocp.StandardCheckpointer()
+        checkpointer = ocp.PyTreeCheckpointer()
         params = checkpointer.restore(path)
         if self.state is None:
             rng = jax.random.PRNGKey(0)
