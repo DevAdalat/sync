@@ -94,15 +94,18 @@ class Trainer:
     def save_checkpoint(self, path: str):
         if self.state is None:
             raise ValueError("No trained state to save")
+        # Convert to absolute path as required by orbax
+        abs_path = os.path.abspath(path)
         # Remove existing checkpoint directory if it exists
-        if os.path.exists(path):
-            shutil.rmtree(path)
+        if os.path.exists(abs_path):
+            shutil.rmtree(abs_path)
         checkpointer = ocp.PyTreeCheckpointer()
-        checkpointer.save(path, self.state.params)
+        checkpointer.save(abs_path, self.state.params)
 
     def load_checkpoint(self, path: str):
         checkpointer = ocp.PyTreeCheckpointer()
-        params = checkpointer.restore(path)
+        abs_path = os.path.abspath(path)
+        params = checkpointer.restore(abs_path)
         if self.state is None:
             rng = jax.random.PRNGKey(0)
             self.state = self.create_train_state(rng)
