@@ -93,6 +93,10 @@ class Trainer:
     def save_checkpoint(self, path: str):
         if self.state is None:
             raise ValueError("No trained state to save")
+        # Remove existing checkpoint directory if it exists
+        if os.path.exists(path):
+            import shutil
+            shutil.rmtree(path)
         os.makedirs(path, exist_ok=True)
         checkpointer = ocp.StandardCheckpointer()
         checkpointer.save(path, self.state.params)
