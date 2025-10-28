@@ -1,5 +1,6 @@
 import os
 import requests
+import json
 from tokenizers import CharBPETokenizer
 from config import ModelConfig, TrainingConfig, DataConfig
 from trainer import Trainer
@@ -101,7 +102,12 @@ def main():
     rng = jax.random.PRNGKey(42)
     trainer.fit(rng)
 
-    print("Training completed!")
+    # Save the trained model
+    trainer.save_checkpoint("trained_model")
+    # Save model config
+    with open("trained_model/config.json", "w") as f:
+        json.dump(model_config.dict(), f)
+    print("Training completed! Model saved to 'trained_model'")
 
 if __name__ == "__main__":
     main()

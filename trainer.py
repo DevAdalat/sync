@@ -6,6 +6,8 @@ from flax import linen as nn
 from datasets import load_dataset
 from typing import Optional, Dict, Any
 import logging
+import os
+from orbax import checkpoint as ocp
 from config import TrainingConfig, DataConfig, ModelConfig
 from model import ProductionTransformer
 from utils import compute_perplexity, compute_accuracy
@@ -89,8 +91,16 @@ class Trainer:
         return loss
 
     def save_checkpoint(self, path: str):
-        # Use orbax or flax checkpoint
-        pass  # Placeholder
+        if self.state is None:
+            raise ValueError("No trained state to save")
+        os.makedirs(path, exist_ok=True)
+        checkpointer = ocp.StandardCheckpointer()
+        checkpointer.save(path, self.state.params)
 
     def load_checkpoint(self, path: str):
-        pass
+        checkpointer = ocp.StandardCheckpointer()
+        params = checkpointer.restore(path)
+        if self.state is None:
+            rng = jax.random.PRNGKey(0)
+            self.state = self.create_train_state(rng)
+        self.state = self.state.replace(params=params)

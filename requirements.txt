@@ -1,6 +1,7 @@
 jax
 flax
 optax
+orbax-checkpoint
 pydantic
 datasets
 onnx
