@@ -1,0 +1,11 @@
+jax
+flax
+optax
+pydantic
+datasets
+onnx
+tf2onnx
+typer
+pytest
+tokenizers
+wandb  # optional for logging
