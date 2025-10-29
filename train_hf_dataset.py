@@ -146,8 +146,8 @@ def train_model(args):
     )
     
     # Define loss and train step
-    def loss_fn(params, batch):
-        logits = model.apply(params, batch["input_ids"], deterministic=False)
+    def loss_fn(params, batch, dropout_rng):
+        logits = model.apply(params, batch["input_ids"], deterministic=False, rngs={'dropout': dropout_rng})
         loss = optax.softmax_cross_entropy_with_integer_labels(
             logits[:, :-1, :].reshape(-1, logits.shape[-1]),
             batch["labels"][:, :-1].reshape(-1)
@@ -155,8 +155,8 @@ def train_model(args):
         return jnp.mean(loss)
     
     @jax.jit
-    def train_step(state, batch):
-        loss, grads = jax.value_and_grad(loss_fn)(state.params, batch)
+    def train_step(state, batch, dropout_rng):
+        loss, grads = jax.value_and_grad(loss_fn)(state.params, batch, dropout_rng)
         state = state.apply_gradients(grads=grads)
         return state, loss
     
@@ -186,7 +186,9 @@ def train_model(args):
                 "labels": targets_shuffled[i:i + args.batch_size]
             }
             
-            state, loss = train_step(state, batch)
+            # Generate new dropout key for each step
+            rng, dropout_rng = jax.random.split(rng)
+            state, loss = train_step(state, batch, dropout_rng)
             epoch_loss += loss
             num_batches += 1
             global_step += 1

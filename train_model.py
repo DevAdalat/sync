@@ -320,8 +320,8 @@ def train_model(
     )
     
     # Define loss and train step
-    def loss_fn(params, batch):
-        logits = model.apply(params, batch["input_ids"], deterministic=False)
+    def loss_fn(params, batch, dropout_rng):
+        logits = model.apply(params, batch["input_ids"], deterministic=False, rngs={'dropout': dropout_rng})
         # Shift logits and labels for next-token prediction
         logits_shifted = logits[:, :-1, :]
         labels_shifted = batch["labels"][:, :-1]
@@ -337,8 +337,8 @@ def train_model(
         return jnp.mean(loss)
     
     @jax.jit
-    def train_step(state, batch):
-        loss, grads = jax.value_and_grad(loss_fn)(state.params, batch)
+    def train_step(state, batch, dropout_rng):
+        loss, grads = jax.value_and_grad(loss_fn)(state.params, batch, dropout_rng)
         state = state.apply_gradients(grads=grads)
         return state, loss
     
@@ -376,7 +376,9 @@ def train_model(
                 "labels": targets_shuffled[i:i + batch_size]
             }
             
-            state, loss = train_step(state, batch)
+            # Generate new dropout key for each step
+            rng, dropout_rng = jax.random.split(rng)
+            state, loss = train_step(state, batch, dropout_rng)
             epoch_loss += loss
             num_batches_processed += 1
             global_step += 1
