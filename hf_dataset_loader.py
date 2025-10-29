@@ -23,8 +23,7 @@ class HFDatasetLoader:
     
     Example usage:
         loader = HFDatasetLoader(
-            dataset_id="wikitext",
-            dataset_config="wikitext-2-raw-v1",
+            dataset_id="iohadrubin/wikitext-103-raw-v1",
             text_column="text",
             split="train"
         )
@@ -317,8 +316,7 @@ if __name__ == "__main__":
     print("="*70)
     
     loader = HFDatasetLoader(
-        dataset_id="wikitext",
-        dataset_config="wikitext-2-raw-v1",
+        dataset_id="iohadrubin/wikitext-103-raw-v1",
         text_column="text",
         split="train"
     )
@@ -337,4 +335,4 @@ if __name__ == "__main__":
     print("Example 2: List Dataset Columns")
     print("="*70)
     
-    list_dataset_columns("wikitext", "wikitext-2-raw-v1", "train")
+    list_dataset_columns("iohadrubin/wikitext-103-raw-v1", split="train")

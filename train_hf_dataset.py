@@ -42,14 +42,14 @@ def train_model(args):
     print("="*70)
     
     # Step 1: Load dataset
-    print(f"\n1. Loading dataset: {args.dataset_id}")
+    print(f"\n1. Loading dataset: {args.dataset}")
     if args.dataset_config:
         print(f"   Config: {args.dataset_config}")
     print(f"   Split: {args.split}")
     print(f"   Text column: {args.text_column}")
-    
+
     dataset_loader = HFDatasetLoader(
-        dataset_id=args.dataset_id,
+        dataset_id=args.dataset,
         dataset_config=args.dataset_config,
         text_column=args.text_column,
         split=args.split
@@ -250,25 +250,29 @@ def main():
         description="Train transformer model on HuggingFace datasets with parameter-based sizing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  # Train 1M parameter model on WikiText-2
-  python train_hf_dataset.py --dataset-id wikitext --dataset-config wikitext-2-raw-v1 \\
-      --text-column text --target-params 1000000 --epochs 3
-  
-  # Train 5M parameter model on TinyStories
-  python train_hf_dataset.py --dataset-id roneneldan/TinyStories \\
-      --text-column text --target-params 5000000 --epochs 5
-  
-  # List available columns in a dataset
-  python train_hf_dataset.py --list-columns --dataset-id wikitext --dataset-config wikitext-2-raw-v1
+ Examples:
+   # Train 1M parameter model on WikiText-2
+   python train_hf_dataset.py --dataset wikitext --dataset-config wikitext-2-raw-v1 \\
+       --text-column text --target-params 1000000 --epochs 3
+
+   # Train 5M parameter model on TinyStories
+   python train_hf_dataset.py --dataset roneneldan/TinyStories \\
+       --text-column text --target-params 5000000 --epochs 5
+
+   # Train on custom dataset
+   python train_hf_dataset.py --dataset iohadrubin/wikitext-103-raw-v1 \\
+       --text-column text --target-params 1000000 --epochs 3
+
+   # List available columns in a dataset
+   python train_hf_dataset.py --list-columns --dataset wikitext --dataset-config wikitext-2-raw-v1
         """
     )
     
     # Dataset arguments
-    parser.add_argument("--dataset-id", type=str, required=True,
-                       help="HuggingFace dataset ID (e.g., 'wikitext', 'roneneldan/TinyStories')")
+    parser.add_argument("--dataset", type=str, required=True,
+                        help="HuggingFace dataset ID (e.g., 'wikitext', 'roneneldan/TinyStories', 'iohadrubin/wikitext-103-raw-v1')")
     parser.add_argument("--dataset-config", type=str, default=None,
-                       help="Dataset configuration/subset (e.g., 'wikitext-2-raw-v1')")
+                        help="Dataset configuration/subset (e.g., 'wikitext-2-raw-v1')")
     parser.add_argument("--text-column", type=str, default="text",
                        help="Column name containing text data (default: 'text')")
     parser.add_argument("--split", type=str, default="train",
@@ -324,7 +328,7 @@ Examples:
     
     # List columns if requested
     if args.list_columns:
-        list_dataset_columns(args.dataset_id, args.dataset_config, args.split)
+        list_dataset_columns(args.dataset, args.dataset_config, args.split)
         return
     
     # Train model
