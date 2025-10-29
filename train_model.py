@@ -403,7 +403,7 @@ def train_model(
         # Save checkpoint if best
         if avg_loss < best_loss:
             best_loss = avg_loss
-            checkpoint_path = f"{output_dir}/best_checkpoint"
+            checkpoint_path = os.path.abspath(f"{output_dir}/best_checkpoint")
             print(f"  ✓ New best loss! Saving checkpoint...")
             
             # Save model params
@@ -412,7 +412,8 @@ def train_model(
             checkpointer.save(checkpoint_path, state.params)
             
             # Save config
-            with open(f"{output_dir}/model_config.json", "w") as f:
+            config_path = os.path.abspath(f"{output_dir}/model_config.json")
+            with open(config_path, "w") as f:
                 json.dump(model_config.dict(), f, indent=2)
     
     # ========================================================================
