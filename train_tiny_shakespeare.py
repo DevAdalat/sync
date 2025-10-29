@@ -1,8 +1,9 @@
 import os
 import requests
 import json
+import argparse
 from tokenizers import CharBPETokenizer
-from config import ModelConfig, TrainingConfig, DataConfig
+from config import ModelConfig, TrainingConfig, DataConfig, CloudConfig
 from trainer import Trainer
 from model import ProductionTransformer
 from utils import load_tokenizer
@@ -38,7 +39,7 @@ def prepare_data(tokenizer, file_path, seq_len=100):
     return inputs, targets
 
 # Main training function
-def main():
+def main(args):
     # Download dataset
     data_file = download_tiny_shakespeare()
 
@@ -63,6 +64,18 @@ def main():
         lora_rank=8
     )
 
+    # Cloud config (if provided)
+    cloud_config = None
+    if args.cloud_bucket:
+        cloud_config = CloudConfig(
+            provider=args.cloud_provider,
+            bucket_name=args.cloud_bucket,
+            region=args.cloud_region,
+            prefix=args.cloud_prefix,
+            sas_token=args.azure_sas_token,
+            account_name=args.azure_account_name
+        )
+
     # Training config
     train_config = TrainingConfig(
         batch_size=16,
@@ -74,11 +87,18 @@ def main():
         gradient_clip_norm=1.0,
         save_steps=500,
         eval_steps=1,
-        log_steps=10
+        log_steps=10,
+        timeout_seconds=args.timeout,
+        cloud_config=cloud_config
     )
 
     # Trainer
     trainer = Trainer(model_config, train_config)
+
+    # Load checkpoint if resuming
+    if args.resume_from:
+        print(f"Resuming training from checkpoint: {args.resume_from}")
+        trainer.load_checkpoint(args.resume_from)
 
     # Override data loader for custom data
     class CustomDataLoader:
@@ -100,14 +120,47 @@ def main():
 
     # Train
     rng = jax.random.PRNGKey(42)
-    trainer.fit(rng)
+    result = trainer.fit(rng)
 
-    # Save the trained model
-    trainer.save_checkpoint("trained_model")
-    # Save model config
-    with open("trained_model/config.json", "w") as f:
-        json.dump(model_config.dict(), f)
-    print("Training completed! Model saved to 'trained_model'")
+    # Check if training was stopped due to timeout
+    if result and train_config.timeout_seconds:
+        print(f"Training stopped due to timeout. Checkpoint saved to: {result}")
+        print(f"To resume training, use: --resume-from '{result}'")
+    else:
+        # Save the trained model
+        trainer.save_checkpoint("trained_model")
+        # Save model config
+        with open("trained_model/config.json", "w") as f:
+            json.dump(model_config.dict(), f)
+        print("Training completed! Model saved to 'trained_model'")
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Train Tiny Shakespeare Transformer")
+
+    # Timeout and cloud options
+    parser.add_argument("--timeout", type=int, default=None,
+                       help="Training timeout in seconds")
+    parser.add_argument("--resume-from", type=str, default=None,
+                       help="Resume training from checkpoint (local path or cloud URL)")
+
+    # Cloud storage options
+    parser.add_argument("--cloud-provider", type=str, choices=["s3", "gcs", "azure"],
+                       default="s3", help="Cloud storage provider")
+    parser.add_argument("--cloud-bucket", type=str, default=None,
+                       help="Cloud bucket/container name")
+    parser.add_argument("--cloud-region", type=str, default=None,
+                       help="Cloud region (AWS region or Azure region)")
+    parser.add_argument("--cloud-prefix", type=str, default="checkpoints",
+                       help="Prefix for checkpoint files in cloud storage")
+
+    # Azure specific options
+    parser.add_argument("--azure-sas-token", type=str, default=None,
+                       help="Azure SAS token for authentication")
+    parser.add_argument("--azure-account-name", type=str, default=None,
+                       help="Azure storage account name")
+
+    return parser.parse_args()
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args)

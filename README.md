@@ -33,6 +33,59 @@ trainer = Trainer(model_config, train_config, data_config)
 trainer.fit(jax.random.PRNGKey(0))
 ```
 
+### Training with Timeout and Cloud Checkpointing
+
+The trainer supports automatic checkpointing with timeout and cloud storage integration.
+
+#### Basic Timeout Training
+
+```python
+from config import ModelConfig, TrainingConfig, CloudConfig
+
+model_config = ModelConfig(vocab_size=1000, d_model=512, num_layers=12)
+
+# Configure cloud storage
+cloud_config = CloudConfig(
+    provider="s3",  # or "gcs", "azure"
+    bucket_name="my-training-bucket",
+    region="us-west-2"
+)
+
+train_config = TrainingConfig(
+    batch_size=32,
+    num_epochs=10,
+    timeout_seconds=3600,  # 1 hour timeout
+    cloud_config=cloud_config
+)
+
+trainer = Trainer(model_config, train_config, data_config)
+result = trainer.fit(jax.random.PRNGKey(0))
+
+if result:
+    print(f"Training stopped due to timeout. Checkpoint: {result}")
+```
+
+#### Command Line Training with Cloud Storage
+
+```bash
+# Train with 1-hour timeout and S3 storage
+python train_tiny_shakespeare.py --timeout 3600 --cloud-bucket my-bucket --cloud-provider s3 --cloud-region us-west-2
+
+# Train with Azure SAS token
+python train_tiny_shakespeare.py --timeout 3600 --cloud-bucket my-container --cloud-provider azure --azure-account-name mystorage --azure-sas-token "?sv=...&st=...&se=...&sr=...&sp=...&sig=..."
+
+# Resume training from cloud checkpoint
+python train_tiny_shakespeare.py --resume-from "s3://my-bucket/checkpoints/timeout_checkpoint_20241201_120000.zip" --cloud-bucket my-bucket --cloud-provider s3
+```
+
+#### Cloud Storage Providers
+
+- **AWS S3**: Set `provider="s3"` and provide `bucket_name` and `region`
+- **Google Cloud Storage**: Set `provider="gcs"` and provide `bucket_name`
+- **Azure Blob Storage**: Set `provider="azure"`, provide `bucket_name` (container), `account_name`, and `sas_token`
+
+For Azure SAS authentication, the SAS token should include the necessary permissions for blob upload/download operations.
+
 ### Inference
 
 ```python

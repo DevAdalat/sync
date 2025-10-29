@@ -8,10 +8,12 @@ from typing import Optional, Dict, Any
 import logging
 import os
 import shutil
+import time
+from datetime import datetime
 from orbax import checkpoint as ocp
 from config import TrainingConfig, DataConfig, ModelConfig
 from model import ProductionTransformer
-from utils import compute_perplexity, compute_accuracy
+from utils import compute_perplexity, compute_accuracy, upload_checkpoint_to_cloud, download_checkpoint_from_cloud
 
 logger = logging.getLogger(__name__)
 
@@ -72,14 +74,35 @@ class Trainer:
         if self.state is None:
             self.state = self.create_train_state(rng)
         train_step = self.get_train_step()
+
+        # Track training start time for timeout functionality
+        training_start_time = time.time()
+        global_step = 0
+
         for epoch in range(self.train_config.num_epochs):
             for step in range(self.train_config.max_steps or len(self.data_loader.dataset) // self.train_config.batch_size if self.data_loader else 100):
+                # Check timeout before each step
+                if self.train_config.timeout_seconds:
+                    elapsed_time = time.time() - training_start_time
+                    if elapsed_time >= self.train_config.timeout_seconds:
+                        logger.info(f"Training timeout reached after {elapsed_time:.2f} seconds. Saving final checkpoint...")
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        checkpoint_name = f"timeout_checkpoint_{timestamp}"
+                        cloud_path = self.save_checkpoint(checkpoint_name)
+                        logger.info(f"Training stopped. Checkpoint saved: {cloud_path}")
+                        return cloud_path  # Return cloud path for resuming
+
                 batch = self.data_loader.get_batch(self.train_config.batch_size) if self.data_loader else {"input_ids": jnp.ones((self.train_config.batch_size, self.model_config.max_len), dtype=jnp.int32), "labels": jnp.ones((self.train_config.batch_size, self.model_config.max_len), dtype=jnp.int32)}
                 self.state, loss = train_step(self.state, batch)
+                global_step += 1
+
                 if step % self.train_config.log_steps == 0:
                     logger.info(f"Epoch {epoch}, Step {step}, Loss: {loss:.4f}")
+
                 if step % self.train_config.save_steps == 0:
-                    self.save_checkpoint(f"checkpoint_{step}")
+                    checkpoint_name = f"checkpoint_epoch_{epoch}_step_{step}"
+                    self.save_checkpoint(checkpoint_name)
+
             # Validation
             if epoch % self.train_config.eval_steps == 0:
                 val_loss = self.validate()
@@ -102,11 +125,32 @@ class Trainer:
         checkpointer = ocp.PyTreeCheckpointer()
         checkpointer.save(abs_path, self.state.params)
 
+        # Upload to cloud if configured
+        if self.train_config.cloud_config:
+            checkpoint_name = os.path.basename(path)
+            cloud_path = upload_checkpoint_to_cloud(abs_path, self.train_config.cloud_config, checkpoint_name)
+            logger.info(f"Checkpoint uploaded to cloud: {cloud_path}")
+            return cloud_path
+        return abs_path
+
     def load_checkpoint(self, path: str):
+        # Check if path is a cloud URL
+        if self.train_config.cloud_config and (path.startswith("s3://") or path.startswith("gs://") or "blob.core.windows.net" in path):
+            # Download from cloud first
+            local_temp_dir = f"/tmp/checkpoint_{int(time.time())}"
+            os.makedirs(local_temp_dir, exist_ok=True)
+            local_path = download_checkpoint_from_cloud(path, self.train_config.cloud_config, local_temp_dir)
+            abs_path = os.path.abspath(local_path)
+        else:
+            abs_path = os.path.abspath(path)
+
         checkpointer = ocp.PyTreeCheckpointer()
-        abs_path = os.path.abspath(path)
         params = checkpointer.restore(abs_path)
         if self.state is None:
             rng = jax.random.PRNGKey(0)
             self.state = self.create_train_state(rng)
         self.state = self.state.replace(params=params)
+
+        # Clean up temp directory if downloaded from cloud
+        if self.train_config.cloud_config and (path.startswith("s3://") or path.startswith("gs://") or "blob.core.windows.net" in path):
+            shutil.rmtree(os.path.dirname(abs_path))

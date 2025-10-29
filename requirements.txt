@@ -10,3 +10,7 @@ typer
 pytest
 tokenizers
 wandb  # optional for logging
+boto3  # AWS S3
+google-cloud-storage  # Google Cloud Storage
+azure-storage-blob  # Azure Blob Storage
+azure-identity  # Azure authentication
