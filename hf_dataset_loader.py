@@ -8,11 +8,15 @@ Supports loading datasets from HuggingFace Hub with:
 - Sequence creation for language modeling
 """
 
+import jax
 import jax.numpy as jnp
 from datasets import load_dataset
 from typing import Optional, List, Union
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing
+import numpy as np
 
 logger = logging.getLogger(__name__)
 
@@ -177,19 +181,24 @@ class HFDatasetLoader:
         tokenizer: Union[Tokenizer, str],
         seq_len: int = 128,
         stride: Optional[int] = None,
-        max_examples: Optional[int] = None
+        max_examples: Optional[int] = None,
+        num_workers: Optional[int] = None,
+        use_gpu: bool = True
     ) -> tuple:
         """
         Prepare input and target sequences for language modeling.
+        Optimized with multithreading (CPU) and GPU acceleration.
         
         Args:
             tokenizer: Tokenizer object or path to tokenizer file
             seq_len: Sequence length
             stride: Stride for overlapping sequences (default: seq_len, no overlap)
             max_examples: Maximum number of examples to process (None for all)
+            num_workers: Number of threads for tokenization (default: CPU count)
+            use_gpu: Whether to use GPU for sequence creation (default: True)
         
         Returns:
-            Tuple of (inputs, targets) as lists
+            Tuple of (inputs, targets) as JAX arrays or lists
         """
         # Load tokenizer if path provided
         if isinstance(tokenizer, str):
@@ -198,20 +207,61 @@ class HFDatasetLoader:
         if stride is None:
             stride = seq_len
         
+        if num_workers is None:
+            num_workers = max(1, multiprocessing.cpu_count() - 1)
+        
         logger.info(f"Preparing sequences (seq_len={seq_len}, stride={stride})")
+        logger.info(f"Using {num_workers} threads for tokenization, GPU: {use_gpu}")
         
         # Get text data
         texts = self.get_text_data(max_examples=max_examples)
         
-        # Tokenize all texts
+        # Parallel tokenization using multithreading
+        def tokenize_batch(text_batch):
+            """Tokenize a batch of texts"""
+            tokens = []
+            for text in text_batch:
+                tokens.extend(tokenizer.encode(text).ids)
+            return tokens
+        
+        # Split texts into chunks for parallel processing
+        chunk_size = max(1, len(texts) // num_workers)
+        text_chunks = [texts[i:i + chunk_size] for i in range(0, len(texts), chunk_size)]
+        
+        logger.info(f"Tokenizing {len(texts)} texts in {len(text_chunks)} chunks...")
+        
         all_tokens = []
-        for text in texts:
-            tokens = tokenizer.encode(text).ids
-            all_tokens.extend(tokens)
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            # Submit all tokenization tasks
+            future_to_chunk = {executor.submit(tokenize_batch, chunk): i 
+                             for i, chunk in enumerate(text_chunks)}
+            
+            # Collect results in order
+            results = [None] * len(text_chunks)
+            for future in as_completed(future_to_chunk):
+                chunk_idx = future_to_chunk[future]
+                results[chunk_idx] = future.result()
+            
+            # Flatten results
+            for result in results:
+                all_tokens.extend(result)
         
         logger.info(f"Total tokens: {len(all_tokens)}")
         
-        # Create sequences
+        # Create sequences using GPU if available and beneficial
+        if use_gpu and len(all_tokens) > 10000:  # Use GPU for large datasets
+            logger.info("Using GPU for sequence creation...")
+            inputs, targets = self._create_sequences_gpu(all_tokens, seq_len, stride)
+        else:
+            logger.info("Using CPU for sequence creation...")
+            inputs, targets = self._create_sequences_cpu(all_tokens, seq_len, stride)
+        
+        logger.info(f"Created {len(inputs)} sequences")
+        
+        return inputs, targets
+    
+    def _create_sequences_cpu(self, all_tokens: List[int], seq_len: int, stride: int) -> tuple:
+        """Create sequences using CPU (fast for small datasets)"""
         inputs = []
         targets = []
         
@@ -223,7 +273,123 @@ class HFDatasetLoader:
                 inputs.append(input_seq)
                 targets.append(target_seq)
         
+        return inputs, targets
+    
+    def _create_sequences_gpu(self, all_tokens: List[int], seq_len: int, stride: int) -> tuple:
+        """Create sequences using GPU with JAX (fast for large datasets)"""
+        # Convert to JAX array
+        tokens_array = jnp.array(all_tokens, dtype=jnp.int32)
+        
+        # Calculate valid starting indices
+        max_start = len(all_tokens) - seq_len
+        num_sequences = (max_start // stride) + (1 if max_start % stride == 0 else 0)
+        
+        # Create index array on GPU
+        start_indices = jnp.arange(0, max_start, stride, dtype=jnp.int32)
+        
+        # Vectorized sequence creation using vmap
+        def extract_input_seq(start_idx):
+            return jax.lax.dynamic_slice(tokens_array, (start_idx,), (seq_len,))
+        
+        def extract_target_seq(start_idx):
+            return jax.lax.dynamic_slice(tokens_array, (start_idx + 1,), (seq_len,))
+        
+        # Use vmap for parallel extraction on GPU
+        inputs = jax.vmap(extract_input_seq)(start_indices)
+        targets = jax.vmap(extract_target_seq)(start_indices)
+        
+        # Convert to lists for compatibility with existing code
+        # (or keep as JAX arrays if downstream code supports it)
+        inputs = inputs.tolist()
+        targets = targets.tolist()
+        
+        return inputs, targets
+    
+    def prepare_sequences_fast(
+        self,
+        tokenizer: Union[Tokenizer, str],
+        seq_len: int = 128,
+        stride: Optional[int] = None,
+        max_examples: Optional[int] = None,
+        num_workers: Optional[int] = None,
+        return_jax: bool = True
+    ):
+        """
+        Optimized version that returns JAX arrays directly (no list conversion).
+        Best for training workflows that expect JAX arrays.
+        
+        Args:
+            tokenizer: Tokenizer object or path to tokenizer file
+            seq_len: Sequence length
+            stride: Stride for overlapping sequences (default: seq_len, no overlap)
+            max_examples: Maximum number of examples to process (None for all)
+            num_workers: Number of threads for tokenization (default: CPU count)
+            return_jax: Return JAX arrays (True) or numpy arrays (False)
+        
+        Returns:
+            Tuple of (inputs, targets) as JAX or numpy arrays
+        """
+        # Load tokenizer if path provided
+        if isinstance(tokenizer, str):
+            tokenizer = Tokenizer.from_file(tokenizer)
+        
+        if stride is None:
+            stride = seq_len
+        
+        if num_workers is None:
+            num_workers = max(1, multiprocessing.cpu_count() - 1)
+        
+        logger.info(f"Preparing sequences (seq_len={seq_len}, stride={stride})")
+        logger.info(f"Using {num_workers} threads for tokenization")
+        
+        # Get text data
+        texts = self.get_text_data(max_examples=max_examples)
+        
+        # Parallel tokenization
+        def tokenize_batch(text_batch):
+            tokens = []
+            for text in text_batch:
+                tokens.extend(tokenizer.encode(text).ids)
+            return tokens
+        
+        chunk_size = max(1, len(texts) // num_workers)
+        text_chunks = [texts[i:i + chunk_size] for i in range(0, len(texts), chunk_size)]
+        
+        logger.info(f"Tokenizing {len(texts)} texts in {len(text_chunks)} chunks...")
+        
+        all_tokens = []
+        with ThreadPoolExecutor(max_workers=num_workers) as executor:
+            future_to_chunk = {executor.submit(tokenize_batch, chunk): i 
+                             for i, chunk in enumerate(text_chunks)}
+            results = [None] * len(text_chunks)
+            for future in as_completed(future_to_chunk):
+                chunk_idx = future_to_chunk[future]
+                results[chunk_idx] = future.result()
+            for result in results:
+                all_tokens.extend(result)
+        
+        logger.info(f"Total tokens: {len(all_tokens)}")
+        logger.info("Using GPU for sequence creation...")
+        
+        # GPU-based sequence creation (no list conversion)
+        tokens_array = jnp.array(all_tokens, dtype=jnp.int32)
+        max_start = len(all_tokens) - seq_len
+        start_indices = jnp.arange(0, max_start, stride, dtype=jnp.int32)
+        
+        def extract_input_seq(start_idx):
+            return jax.lax.dynamic_slice(tokens_array, (start_idx,), (seq_len,))
+        
+        def extract_target_seq(start_idx):
+            return jax.lax.dynamic_slice(tokens_array, (start_idx + 1,), (seq_len,))
+        
+        inputs = jax.vmap(extract_input_seq)(start_indices)
+        targets = jax.vmap(extract_target_seq)(start_indices)
+        
         logger.info(f"Created {len(inputs)} sequences")
+        
+        if not return_jax:
+            inputs = np.array(inputs)
+            targets = np.array(targets)
         
         return inputs, targets
     
@@ -234,10 +400,11 @@ class HFDatasetLoader:
         seq_len: int = 128,
         stride: Optional[int] = None,
         max_examples: Optional[int] = None,
-        shuffle: bool = True
+        shuffle: bool = True,
+        num_workers: Optional[int] = None
     ):
         """
-        Create a batch iterator for training.
+        Create a batch iterator for training (now optimized).
         
         Args:
             tokenizer: Tokenizer object or path to tokenizer file
@@ -246,22 +413,18 @@ class HFDatasetLoader:
             stride: Stride for overlapping sequences
             max_examples: Maximum number of examples to process
             shuffle: Whether to shuffle the data
+            num_workers: Number of threads for tokenization (default: CPU count)
         
         Yields:
             Batches of (inputs, targets) as JAX arrays
         """
-        # Prepare sequences
-        inputs, targets = self.prepare_sequences(
-            tokenizer, seq_len, stride, max_examples
+        # Use optimized method that returns JAX arrays directly
+        inputs, targets = self.prepare_sequences_fast(
+            tokenizer, seq_len, stride, max_examples, num_workers, return_jax=True
         )
-        
-        # Convert to JAX arrays
-        inputs = jnp.array(inputs, dtype=jnp.int32)
-        targets = jnp.array(targets, dtype=jnp.int32)
         
         # Shuffle if requested
         if shuffle:
-            import jax
             rng = jax.random.PRNGKey(42)
             perm = jax.random.permutation(rng, len(inputs))
             inputs = inputs[perm]
