@@ -91,11 +91,11 @@ def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None):
     return model, params, tokenizer, model_config
 
 
-def create_generate_step(model):
-    """Create JIT-compiled generation step function for a specific model."""
+def create_generate_step(model, top_k):
+    """Create JIT-compiled generation step function for a specific model and top_k."""
     
     @jax.jit
-    def generate_step(params, input_ids, rng, temperature, top_k):
+    def generate_step(params, input_ids, rng, temperature):
         """
         Single generation step (JIT-compiled for speed).
         Returns next token ID.
@@ -107,7 +107,7 @@ def create_generate_step(model):
         # Apply temperature
         next_token_logits = next_token_logits / temperature
         
-        # Apply top-k filtering if specified
+        # Apply top-k filtering if specified (top_k captured in closure)
         if top_k > 0:
             top_k_logits, top_k_indices = jax.lax.top_k(next_token_logits, top_k)
             next_token_logits = jnp.full_like(next_token_logits, float('-inf'))
@@ -169,8 +169,8 @@ def generate_text(
     # Generate tokens
     rng = jax.random.PRNGKey(rng_seed)
     
-    # Create JIT-compiled generation step
-    generate_step = create_generate_step(model)
+    # Create JIT-compiled generation step (top_k captured in closure)
+    generate_step = create_generate_step(model, top_k)
     
     # Store generated token IDs
     generated_tokens = []
@@ -178,13 +178,13 @@ def generate_text(
     # Warmup JIT compilation (first call is slow, rest are fast)
     print(" ", end="", flush=True)
     rng, warmup_rng = jax.random.split(rng)
-    _ = generate_step(params, input_ids, warmup_rng, temperature, top_k)
+    _ = generate_step(params, input_ids, warmup_rng, temperature)
     print("\b", end="", flush=True)
     
     for i in range(max_length):
         # Generate next token (JIT-compiled, FAST!)
         rng, step_rng = jax.random.split(rng)
-        next_token = generate_step(params, input_ids, step_rng, temperature, top_k)
+        next_token = generate_step(params, input_ids, step_rng, temperature)
         
         # Store token ID
         next_token_int = int(next_token)
