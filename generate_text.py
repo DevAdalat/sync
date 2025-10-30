@@ -100,7 +100,7 @@ def create_generate_step(model, top_k):
         Single generation step (JIT-compiled for speed).
         Returns next token ID.
         """
-        # Get logits for next token
+        # Get logits for next token (only for last position)
         logits = model.apply(params, input_ids, deterministic=True)
         next_token_logits = logits[0, -1, :]
         
@@ -118,6 +118,46 @@ def create_generate_step(model, top_k):
         return next_token
     
     return generate_step
+
+
+def create_fast_generate_step(model, top_k, max_new_tokens=100):
+    """
+    Create optimized batch generation function.
+    Generates multiple tokens at once using scan for better GPU utilization.
+    """
+    
+    def scan_fn(carry, rng):
+        input_ids, temperature = carry
+        
+        # Get logits
+        logits = model.apply(carry[2], input_ids, deterministic=True)
+        next_token_logits = logits[0, -1, :]
+        
+        # Apply temperature
+        next_token_logits = next_token_logits / temperature
+        
+        # Apply top-k
+        if top_k > 0:
+            top_k_logits, top_k_indices = jax.lax.top_k(next_token_logits, top_k)
+            next_token_logits = jnp.full_like(next_token_logits, float('-inf'))
+            next_token_logits = next_token_logits.at[top_k_indices].set(top_k_logits)
+        
+        # Sample
+        next_token = jax.random.categorical(rng, next_token_logits)
+        
+        # Append to sequence
+        new_input_ids = jnp.concatenate([input_ids, jnp.array([[next_token]])], axis=1)
+        
+        return (new_input_ids, temperature, carry[2]), next_token
+    
+    @jax.jit
+    def generate_batch(params, input_ids, rngs, temperature):
+        """Generate multiple tokens in one JIT call."""
+        carry = (input_ids, temperature, params)
+        carry, tokens = jax.lax.scan(scan_fn, carry, rngs)
+        return carry[0], tokens
+    
+    return generate_batch
 
 
 def generate_text(
@@ -161,10 +201,6 @@ def generate_text(
     print(f"Temperature: {temperature}")
     print(f"Top-k: {top_k if top_k > 0 else 'disabled'}")
     print(f"Top-p: {top_p if top_p < 1.0 else 'disabled'}")
-    print(f"\n{'-'*80}")
-    print("Generated text:")
-    print(f"{'-'*80}")
-    print(prompt, end="", flush=True)
     
     # Generate tokens
     rng = jax.random.PRNGKey(rng_seed)
@@ -175,16 +211,32 @@ def generate_text(
     # Store generated token IDs
     generated_tokens = []
     
+    # CRITICAL OPTIMIZATION: Use sliding window to keep context manageable
+    # With 92 layers, passing full sequence is too slow
+    context_window = min(64, model.config.max_len)  # Use last 64 tokens max
+    
+    print(f"⚡ Using sliding window: {context_window} tokens (for speed with {model.config.num_layers} layers)")
+    
     # Warmup JIT compilation (first call is slow, rest are fast)
-    print(" ", end="", flush=True)
+    print("\nCompiling model (this takes ~30 seconds, but then generation is fast)...", flush=True)
+    import time
+    warmup_start = time.time()
     rng, warmup_rng = jax.random.split(rng)
-    _ = generate_step(params, input_ids, warmup_rng, temperature)
-    print("\b", end="", flush=True)
+    warmup_token = generate_step(params, input_ids, warmup_rng, temperature)
+    warmup_token.block_until_ready()  # Wait for GPU
+    warmup_time = time.time() - warmup_start
+    print(f"✓ Compilation done in {warmup_time:.1f}s. Starting generation...\n")
+    
+    print(f"{'-'*80}")
+    print("Generated text:")
+    print(f"{'-'*80}")
+    print(prompt, end="", flush=True)
     
     for i in range(max_length):
         # Generate next token (JIT-compiled, FAST!)
         rng, step_rng = jax.random.split(rng)
         next_token = generate_step(params, input_ids, step_rng, temperature)
+        next_token.block_until_ready()  # Ensure GPU computation completes
         
         # Store token ID
         next_token_int = int(next_token)
@@ -203,6 +255,11 @@ def generate_text(
         
         # Add token to sequence
         input_ids = jnp.concatenate([input_ids, jnp.array([[next_token]])], axis=1)
+        
+        # CRITICAL: Use sliding window to prevent slowdown
+        # Only keep last context_window tokens for next iteration
+        if input_ids.shape[1] > context_window:
+            input_ids = input_ids[:, -context_window:]
         
         # Check for end of sequence tokens
         eos_tokens = ["<eos>", "</s>", "<|endoftext|>", "[EOS]"]
