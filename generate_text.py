@@ -91,6 +91,30 @@ def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None):
     return model, params, tokenizer, model_config
 
 
+@jax.jit
+def get_next_token_logits(params, input_ids, model_apply):
+    """JIT-compiled function to get next token logits (FAST!)"""
+    logits = model_apply(params, input_ids, deterministic=True)
+    return logits[0, -1, :]
+
+
+@jax.jit
+def sample_token(rng, logits, temperature, top_k):
+    """JIT-compiled sampling function (FAST!)"""
+    # Apply temperature
+    logits = logits / temperature
+    
+    # Apply top-k if specified
+    if top_k > 0:
+        top_k_logits, top_k_indices = jax.lax.top_k(logits, top_k)
+        logits = jnp.full_like(logits, float('-inf'))
+        logits = logits.at[top_k_indices].set(top_k_logits)
+    
+    # Sample
+    next_token = jax.random.categorical(rng, logits)
+    return next_token
+
+
 def generate_text(
     model,
     params,
@@ -140,46 +164,39 @@ def generate_text(
     # Generate tokens
     rng = jax.random.PRNGKey(rng_seed)
     
+    # Compile model.apply for faster inference
+    model_apply = jax.jit(model.apply)
+    
+    # Store generated token IDs
+    generated_tokens = []
+    
+    # Warmup JIT compilation (first call is slow, rest are fast)
+    print(" ", end="", flush=True)
+    _ = get_next_token_logits(params, input_ids, model_apply)
+    print("\b", end="", flush=True)
+    
     for i in range(max_length):
-        # Get logits for next token
-        logits = model.apply(params, input_ids, deterministic=True)
-        next_token_logits = logits[0, -1, :]  # Get last token logits
+        # Get logits for next token (JIT-compiled, FAST!)
+        next_token_logits = get_next_token_logits(params, input_ids, model_apply)
         
-        # Apply temperature
-        if temperature != 1.0:
-            next_token_logits = next_token_logits / temperature
-        
-        # Apply top-k filtering
-        if top_k > 0:
-            top_k_logits, top_k_indices = jax.lax.top_k(next_token_logits, top_k)
-            # Create mask for top-k
-            next_token_logits = jnp.full_like(next_token_logits, float('-inf'))
-            next_token_logits = next_token_logits.at[top_k_indices].set(top_k_logits)
-        
-        # Apply top-p (nucleus) filtering
-        if top_p < 1.0:
-            sorted_logits = jnp.sort(next_token_logits)[::-1]
-            sorted_probs = jax.nn.softmax(sorted_logits)
-            cumsum_probs = jnp.cumsum(sorted_probs)
-            
-            # Find cutoff index
-            cutoff_index = jnp.searchsorted(cumsum_probs, top_p)
-            cutoff_logit = sorted_logits[cutoff_index]
-            
-            # Mask logits below cutoff
-            next_token_logits = jnp.where(
-                next_token_logits >= cutoff_logit,
-                next_token_logits,
-                float('-inf')
-            )
-        
-        # Sample next token
+        # Sample next token (JIT-compiled, FAST!)
         rng, sample_rng = jax.random.split(rng)
-        next_token = jax.random.categorical(sample_rng, next_token_logits)
+        next_token = sample_token(sample_rng, next_token_logits, temperature, top_k)
         
-        # Decode and print token
-        token_text = tokenizer.decode([int(next_token)])
-        print(token_text, end="", flush=True)
+        # Store token ID
+        next_token_int = int(next_token)
+        generated_tokens.append(next_token_int)
+        
+        # Decode and print incrementally (decode all generated tokens for proper spacing)
+        token_text = tokenizer.decode(generated_tokens)
+        # Print only the new character(s) since last iteration
+        if i == 0:
+            new_text = token_text
+        else:
+            prev_text = tokenizer.decode(generated_tokens[:-1])
+            new_text = token_text[len(prev_text):]
+        
+        print(new_text, end="", flush=True)
         
         # Add token to sequence
         input_ids = jnp.concatenate([input_ids, jnp.array([[next_token]])], axis=1)
@@ -200,7 +217,7 @@ def generate_text(
     generated_ids = input_ids[0].tolist()
     generated_text = tokenizer.decode(generated_ids)
     
-    print(f"\nGenerated {len(generated_ids) - len(encoded.ids)} new tokens")
+    print(f"\nGenerated {len(generated_tokens)} new tokens")
     print(f"Total tokens: {len(generated_ids)}")
     
     return generated_text
