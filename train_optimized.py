@@ -514,7 +514,7 @@ def train_model_optimized(
                 # Save config
                 config_path = os.path.abspath(f"{output_dir}/model_config.json")
                 with open(config_path, "w") as f:
-                    json.dump(model_config.dict(), f, indent=2)
+                    json.dump(model_config.model_dump(), f, indent=2)
     
     # ========================================================================
     # Training Complete

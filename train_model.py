@@ -415,13 +415,16 @@ def train_model(
             
             # Save model params
             from orbax import checkpoint as ocp
+            import shutil
             checkpointer = ocp.PyTreeCheckpointer()
+            if os.path.exists(checkpoint_path):
+                shutil.rmtree(checkpoint_path)
             checkpointer.save(checkpoint_path, state.params)
             
             # Save config
             config_path = os.path.abspath(f"{output_dir}/model_config.json")
             with open(config_path, "w") as f:
-                json.dump(model_config.dict(), f, indent=2)
+                json.dump(model_config.model_dump(), f, indent=2)
     
     # ========================================================================
     # Training Complete
