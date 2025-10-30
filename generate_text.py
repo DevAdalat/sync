@@ -91,28 +91,33 @@ def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None):
     return model, params, tokenizer, model_config
 
 
-@jax.jit
-def get_next_token_logits(params, input_ids, model_apply):
-    """JIT-compiled function to get next token logits (FAST!)"""
-    logits = model_apply(params, input_ids, deterministic=True)
-    return logits[0, -1, :]
-
-
-@jax.jit
-def sample_token(rng, logits, temperature, top_k):
-    """JIT-compiled sampling function (FAST!)"""
-    # Apply temperature
-    logits = logits / temperature
+def create_generate_step(model):
+    """Create JIT-compiled generation step function for a specific model."""
     
-    # Apply top-k if specified
-    if top_k > 0:
-        top_k_logits, top_k_indices = jax.lax.top_k(logits, top_k)
-        logits = jnp.full_like(logits, float('-inf'))
-        logits = logits.at[top_k_indices].set(top_k_logits)
+    @jax.jit
+    def generate_step(params, input_ids, rng, temperature, top_k):
+        """
+        Single generation step (JIT-compiled for speed).
+        Returns next token ID.
+        """
+        # Get logits for next token
+        logits = model.apply(params, input_ids, deterministic=True)
+        next_token_logits = logits[0, -1, :]
+        
+        # Apply temperature
+        next_token_logits = next_token_logits / temperature
+        
+        # Apply top-k filtering if specified
+        if top_k > 0:
+            top_k_logits, top_k_indices = jax.lax.top_k(next_token_logits, top_k)
+            next_token_logits = jnp.full_like(next_token_logits, float('-inf'))
+            next_token_logits = next_token_logits.at[top_k_indices].set(top_k_logits)
+        
+        # Sample next token
+        next_token = jax.random.categorical(rng, next_token_logits)
+        return next_token
     
-    # Sample
-    next_token = jax.random.categorical(rng, logits)
-    return next_token
+    return generate_step
 
 
 def generate_text(
@@ -164,24 +169,22 @@ def generate_text(
     # Generate tokens
     rng = jax.random.PRNGKey(rng_seed)
     
-    # Compile model.apply for faster inference
-    model_apply = jax.jit(model.apply)
+    # Create JIT-compiled generation step
+    generate_step = create_generate_step(model)
     
     # Store generated token IDs
     generated_tokens = []
     
     # Warmup JIT compilation (first call is slow, rest are fast)
     print(" ", end="", flush=True)
-    _ = get_next_token_logits(params, input_ids, model_apply)
+    rng, warmup_rng = jax.random.split(rng)
+    _ = generate_step(params, input_ids, warmup_rng, temperature, top_k)
     print("\b", end="", flush=True)
     
     for i in range(max_length):
-        # Get logits for next token (JIT-compiled, FAST!)
-        next_token_logits = get_next_token_logits(params, input_ids, model_apply)
-        
-        # Sample next token (JIT-compiled, FAST!)
-        rng, sample_rng = jax.random.split(rng)
-        next_token = sample_token(sample_rng, next_token_logits, temperature, top_k)
+        # Generate next token (JIT-compiled, FAST!)
+        rng, step_rng = jax.random.split(rng)
+        next_token = generate_step(params, input_ids, step_rng, temperature, top_k)
         
         # Store token ID
         next_token_int = int(next_token)
