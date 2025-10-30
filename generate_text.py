@@ -298,8 +298,10 @@ Examples:
     
     # Load model
     try:
+        # Convert checkpoint path to absolute path (required by Orbax)
+        checkpoint_path = os.path.abspath(args.checkpoint)
         model, params, tokenizer, config = load_model_and_tokenizer(
-            args.checkpoint,
+            checkpoint_path,
             args.tokenizer_path
         )
     except Exception as e:
