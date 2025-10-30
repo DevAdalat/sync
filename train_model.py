@@ -28,6 +28,13 @@ from model import ProductionTransformer
 from model_sizing import create_model_from_params
 from hf_dataset_loader import HFDatasetLoader
 
+try:
+    from streaming_data_loader import StreamingDataLoader
+    STREAMING_AVAILABLE = True
+except ImportError:
+    STREAMING_AVAILABLE = False
+    print("Warning: streaming_data_loader not available. Install for better memory efficiency.")
+
 
 def count_params(params):
     """Count total parameters in model"""

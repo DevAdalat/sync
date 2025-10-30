@@ -41,7 +41,7 @@ class HFDatasetLoader:
         text_column: str = "text",
         dataset_config: Optional[str] = None,
         split: str = "train",
-        streaming: bool = False,
+        streaming: bool = True,  # Default to streaming for memory efficiency
         trust_remote_code: bool = False
     ):
         """
@@ -52,7 +52,7 @@ class HFDatasetLoader:
             text_column: Column name containing text data
             dataset_config: Dataset configuration/subset (e.g., "wikitext-2-raw-v1")
             split: Dataset split ("train", "validation", "test")
-            streaming: Whether to stream the dataset
+            streaming: Whether to stream the dataset (recommended for memory efficiency)
             trust_remote_code: Trust remote code when loading dataset
         """
         self.dataset_id = dataset_id
@@ -67,6 +67,7 @@ class HFDatasetLoader:
             logger.info(f"  Config: {dataset_config}")
         logger.info(f"  Split: {split}")
         logger.info(f"  Text column: {text_column}")
+        logger.info(f"  Streaming mode: {streaming} ({'Memory efficient!' if streaming else 'Loads all data'})")
         
         # Load dataset
         self.dataset = load_dataset(
