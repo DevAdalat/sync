@@ -28,17 +28,41 @@ from orbax import checkpoint as ocp
 from model import ProductionTransformer
 
 
-def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None):
+def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None, use_multi_device: bool = True):
     """
     Load model configuration, parameters, and tokenizer.
     
     Args:
         checkpoint_dir: Path to checkpoint directory
         tokenizer_path: Path to tokenizer.json (auto-detected if None)
+        use_multi_device: Enable multi-device inference if available
     
     Returns:
-        Tuple of (model, params, tokenizer, config)
+        Tuple of (model, params, tokenizer, config, device_info)
     """
+    # Detect available devices
+    devices = jax.devices()
+    num_devices = len(devices)
+    backend = jax.default_backend()
+    
+    device_info = {
+        "num_devices": num_devices,
+        "backend": backend,
+        "use_multi_device": use_multi_device and num_devices > 1
+    }
+    
+    print(f"\n{'='*80}")
+    print("DEVICE CONFIGURATION")
+    print("="*80)
+    print(f"Backend:       {backend.upper()}")
+    print(f"Num devices:   {num_devices}")
+    if device_info["use_multi_device"]:
+        print(f"✓ Multi-device inference enabled ({num_devices} devices)")
+        print(f"  Using data parallelism for batch generation")
+    else:
+        print(f"Single-device inference")
+    print("="*80)
+    
     # Auto-detect tokenizer path
     if tokenizer_path is None:
         # Try common locations
@@ -58,7 +82,7 @@ def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None):
                 f"Could not find tokenizer.json. Please specify with --tokenizer-path"
             )
     
-    print(f"Loading tokenizer from: {tokenizer_path}")
+    print(f"\nLoading tokenizer from: {tokenizer_path}")
     tokenizer = Tokenizer.from_file(tokenizer_path)
     
     # Load model config
@@ -82,40 +106,71 @@ def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None):
     checkpointer = ocp.PyTreeCheckpointer()
     params = checkpointer.restore(checkpoint_dir)
     
+    # Replicate params across devices if using multi-device
+    if device_info["use_multi_device"]:
+        print(f"Replicating parameters across {num_devices} devices...")
+        params = jax.device_put_replicated(params, devices)
+    
     print(f"✓ Model loaded successfully!")
     print(f"  Vocab size: {model_config.vocab_size}")
     print(f"  Max length: {model_config.max_len}")
     print(f"  Model size: {model_config.d_model}")
     print(f"  Layers: {model_config.num_layers}")
     
-    return model, params, tokenizer, model_config
+    return model, params, tokenizer, model_config, device_info
 
 
-def create_generate_step(model, top_k):
+def create_generate_step(model, top_k, use_pmap=False):
     """Create JIT-compiled generation step function for a specific model and top_k."""
     
-    @jax.jit
-    def generate_step(params, input_ids, rng, temperature):
-        """
-        Single generation step (JIT-compiled for speed).
-        Returns next token ID.
-        """
-        # Get logits for next token (only for last position)
-        logits = model.apply(params, input_ids, deterministic=True)
-        next_token_logits = logits[0, -1, :]
-        
-        # Apply temperature
-        next_token_logits = next_token_logits / temperature
-        
-        # Apply top-k filtering if specified (top_k captured in closure)
-        if top_k > 0:
-            top_k_logits, top_k_indices = jax.lax.top_k(next_token_logits, top_k)
-            next_token_logits = jnp.full_like(next_token_logits, float('-inf'))
-            next_token_logits = next_token_logits.at[top_k_indices].set(top_k_logits)
-        
-        # Sample next token
-        next_token = jax.random.categorical(rng, next_token_logits)
-        return next_token
+    if use_pmap:
+        # Multi-device generation using pmap
+        @jax.pmap
+        def generate_step(params, input_ids, rng, temperature):
+            """
+            Parallel generation step across multiple devices.
+            Returns next token ID per device.
+            """
+            # Get logits for next token (only for last position)
+            logits = model.apply(params, input_ids, deterministic=True)
+            next_token_logits = logits[0, -1, :]
+            
+            # Apply temperature
+            next_token_logits = next_token_logits / temperature
+            
+            # Apply top-k filtering if specified
+            if top_k > 0:
+                top_k_logits, top_k_indices = jax.lax.top_k(next_token_logits, top_k)
+                next_token_logits = jnp.full_like(next_token_logits, float('-inf'))
+                next_token_logits = next_token_logits.at[top_k_indices].set(top_k_logits)
+            
+            # Sample next token
+            next_token = jax.random.categorical(rng, next_token_logits)
+            return next_token
+    else:
+        # Single-device generation
+        @jax.jit
+        def generate_step(params, input_ids, rng, temperature):
+            """
+            Single generation step (JIT-compiled for speed).
+            Returns next token ID.
+            """
+            # Get logits for next token (only for last position)
+            logits = model.apply(params, input_ids, deterministic=True)
+            next_token_logits = logits[0, -1, :]
+            
+            # Apply temperature
+            next_token_logits = next_token_logits / temperature
+            
+            # Apply top-k filtering if specified (top_k captured in closure)
+            if top_k > 0:
+                top_k_logits, top_k_indices = jax.lax.top_k(next_token_logits, top_k)
+                next_token_logits = jnp.full_like(next_token_logits, float('-inf'))
+                next_token_logits = next_token_logits.at[top_k_indices].set(top_k_logits)
+            
+            # Sample next token
+            next_token = jax.random.categorical(rng, next_token_logits)
+            return next_token
     
     return generate_step
 
@@ -169,7 +224,8 @@ def generate_text(
     temperature: float = 1.0,
     top_k: int = 0,
     top_p: float = 1.0,
-    rng_seed: int = 42
+    rng_seed: int = 42,
+    device_info: dict = None
 ):
     """
     Generate text from a prompt using the trained model.
@@ -205,8 +261,11 @@ def generate_text(
     # Generate tokens
     rng = jax.random.PRNGKey(rng_seed)
     
+    # Detect multi-device setup
+    use_multi_device = device_info and device_info.get("use_multi_device", False)
+    
     # Create JIT-compiled generation step (top_k captured in closure)
-    generate_step = create_generate_step(model, top_k)
+    generate_step = create_generate_step(model, top_k, use_pmap=use_multi_device)
     
     # Store generated token IDs
     generated_tokens = []
@@ -377,9 +436,10 @@ Examples:
     try:
         # Convert checkpoint path to absolute path (required by Orbax)
         checkpoint_path = os.path.abspath(args.checkpoint)
-        model, params, tokenizer, config = load_model_and_tokenizer(
+        model, params, tokenizer, config, device_info = load_model_and_tokenizer(
             checkpoint_path,
-            args.tokenizer_path
+            args.tokenizer_path,
+            use_multi_device=True  # Enable multi-device by default
         )
     except Exception as e:
         print(f"\n❌ Error loading model: {e}")
@@ -396,7 +456,8 @@ Examples:
             temperature=args.temperature,
             top_k=args.top_k,
             top_p=args.top_p,
-            rng_seed=args.seed
+            rng_seed=args.seed,
+            device_info=device_info
         )
         
         print(f"\n{'='*80}")

@@ -285,6 +285,7 @@ def train_model(
     print(f"\nData Statistics:")
     print(f"  Total sequences: {num_sequences:,}")
     print(f"  Total tokens:    {total_tokens:,}")
+    print(f"  Batch size:      {batch_size}")
     print(f"  Batches/epoch:   {num_batches:,}")
     print(f"  Total batches:   {num_batches * epochs:,}")
     
@@ -343,11 +344,39 @@ def train_model(
         )
         return jnp.mean(loss)
     
-    @jax.jit
-    def train_step(state, batch, dropout_rng):
-        loss, grads = jax.value_and_grad(loss_fn)(state.params, batch, dropout_rng)
-        state = state.apply_gradients(grads=grads)
-        return state, loss
+    # Check if we have multiple devices for data parallelism
+    num_devices = device_info["num_devices"]
+    use_multi_device = num_devices > 1
+    
+    if use_multi_device:
+        print(f"\n✓ Enabling multi-device training with {num_devices} devices")
+        print(f"  • Using jax.pmap for data parallelism")
+        print(f"  • Effective batch size: {batch_size * num_devices}")
+        
+        # Multi-device train step using pmap
+        @jax.pmap
+        def train_step_pmap(state, batch, dropout_rng):
+            """Parallel training step across multiple devices."""
+            loss, grads = jax.value_and_grad(loss_fn)(state.params, batch, dropout_rng)
+            # Average gradients across devices (pmap does this automatically)
+            state = state.apply_gradients(grads=grads)
+            return state, loss
+        
+        # Replicate state across devices
+        print(f"  • Replicating model parameters across {num_devices} devices...")
+        state = jax.device_put_replicated(state, jax.devices())
+        print(f"  • Parameters replicated successfully")
+        
+        train_step = train_step_pmap
+    else:
+        print(f"\n✓ Using single-device training")
+        
+        # Single-device train step
+        @jax.jit
+        def train_step(state, batch, dropout_rng):
+            loss, grads = jax.value_and_grad(loss_fn)(state.params, batch, dropout_rng)
+            state = state.apply_gradients(grads=grads)
+            return state, loss
     
     # ========================================================================
     # Step 6: Train
@@ -376,25 +405,55 @@ def train_model(
         inputs_shuffled = inputs[perm]
         targets_shuffled = targets[perm]
         
+        # Determine effective batch size for multi-device training
+        effective_batch_size = batch_size * num_devices if use_multi_device else batch_size
+        
         # Training loop
-        for i in range(0, len(inputs) - batch_size, batch_size):
-            batch = {
-                "input_ids": inputs_shuffled[i:i + batch_size],
-                "labels": targets_shuffled[i:i + batch_size]
-            }
+        for i in range(0, len(inputs) - effective_batch_size, effective_batch_size):
+            if use_multi_device:
+                # Split batch across devices
+                batch_data = {
+                    "input_ids": inputs_shuffled[i:i + effective_batch_size],
+                    "labels": targets_shuffled[i:i + effective_batch_size]
+                }
+                
+                # Reshape to (num_devices, per_device_batch_size, seq_len)
+                batch = {
+                    "input_ids": batch_data["input_ids"].reshape(num_devices, batch_size, seq_len),
+                    "labels": batch_data["labels"].reshape(num_devices, batch_size, seq_len)
+                }
+                
+                # Generate dropout keys for each device
+                rng, *dropout_rngs = jax.random.split(rng, num_devices + 1)
+                dropout_rng = jnp.array(dropout_rngs)
+                
+                # Train step returns (state_per_device, loss_per_device)
+                state, loss = train_step(state, batch, dropout_rng)
+                
+                # Average loss across devices for logging
+                epoch_loss += jnp.mean(loss)
+            else:
+                # Single device batch
+                batch = {
+                    "input_ids": inputs_shuffled[i:i + batch_size],
+                    "labels": targets_shuffled[i:i + batch_size]
+                }
+                
+                # Generate new dropout key for each step
+                rng, dropout_rng = jax.random.split(rng)
+                state, loss = train_step(state, batch, dropout_rng)
+                epoch_loss += loss
             
-            # Generate new dropout key for each step
-            rng, dropout_rng = jax.random.split(rng)
-            state, loss = train_step(state, batch, dropout_rng)
-            epoch_loss += loss
             num_batches_processed += 1
             global_step += 1
             
             # Log progress
             if global_step % log_every == 0:
                 elapsed = time.time() - start_time
-                tokens_per_sec = (global_step * batch_size * seq_len) / elapsed
-                print(f"  Step {global_step:>5} | Loss: {loss:.4f} | "
+                # Calculate tokens/sec based on effective batch size
+                tokens_per_sec = (global_step * effective_batch_size * seq_len) / elapsed
+                current_loss = jnp.mean(loss) if use_multi_device else loss
+                print(f"  Step {global_step:>5} | Loss: {current_loss:.4f} | "
                       f"Tokens/sec: {tokens_per_sec:>8,.0f} | Time: {elapsed:>6.1f}s")
         
         # Epoch summary
@@ -419,7 +478,10 @@ def train_model(
             checkpointer = ocp.PyTreeCheckpointer()
             if os.path.exists(checkpoint_path):
                 shutil.rmtree(checkpoint_path)
-            checkpointer.save(checkpoint_path, state.params)
+            
+            # Extract params from first device if using multi-device training
+            params_to_save = jax.tree_map(lambda x: x[0], state.params) if use_multi_device else state.params
+            checkpointer.save(checkpoint_path, params_to_save)
             
             # Save config
             config_path = os.path.abspath(f"{output_dir}/model_config.json")
