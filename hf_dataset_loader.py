@@ -288,8 +288,9 @@ class HFDatasetLoader:
                 token_buffer = token_buffer[stride:]
                 
                 # Progress reporting and cleanup
-                if seq_idx % 10000 == 0:
-                    logger.info(f"Created {seq_idx}/{num_sequences} sequences...")
+                if seq_idx % 1000 == 0 or seq_idx == num_sequences - 1:
+                    percent_done = (seq_idx / num_sequences) * 100
+                    logger.info(f"Progress: {percent_done:.1f}% ({seq_idx}/{num_sequences} sequences)")
                     import gc
                     gc.collect()
         
@@ -317,8 +318,8 @@ class HFDatasetLoader:
                     yield token
             
             count += 1
-            if count % 1000 == 0:
-                logger.info(f"Processed {count} examples...")
+            if count % 100 == 0:
+                logger.info(f"Tokenizing: {count} examples processed...")
     
     def _prepare_sequences_original(
         self,
