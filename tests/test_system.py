@@ -1,12 +1,14 @@
 import jax
-from src.config.config import ModelConfig, TrainingConfig, DataConfig
-from src.models.model import ProductionTransformer
-from trainer import Trainer
+
 from api import TransformerAPI
+from src.config.config import ModelConfig
+from src.models.model import ProductionTransformer
 from src.utils.utils import load_vocab
 
 # Simple test
-model_config = ModelConfig(vocab_size=100, d_model=32, num_heads=2, num_layers=1, d_ff=64, max_len=10)
+model_config = ModelConfig(
+    vocab_size=100, d_model=32, num_heads=2, num_layers=1, d_ff=64, max_len=10
+)
 model = ProductionTransformer(model_config)
 
 # Test init

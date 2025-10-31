@@ -1,8 +1,9 @@
 # Install dependencies: pip install jax flax optax
 import jax
 import jax.numpy as jnp
-from flax import linen as nn
 import optax
+from flax import linen as nn
+
 
 class LoRALinear(nn.Module):
     features: int
@@ -10,12 +11,17 @@ class LoRALinear(nn.Module):
 
     @nn.compact
     def __call__(self, x):
-        w = self.param('kernel', nn.initializers.xavier_uniform(), (x.shape[-1], self.features))
-        b = self.param('bias', nn.initializers.zeros, (self.features,))
-        lora_a = self.param('lora_a', nn.initializers.normal(0.01), (x.shape[-1], self.rank))
-        lora_b = self.param('lora_b', nn.initializers.zeros, (self.rank, self.features))
+        w = self.param(
+            "kernel", nn.initializers.xavier_uniform(), (x.shape[-1], self.features)
+        )
+        b = self.param("bias", nn.initializers.zeros, (self.features,))
+        lora_a = self.param(
+            "lora_a", nn.initializers.normal(0.01), (x.shape[-1], self.rank)
+        )
+        lora_b = self.param("lora_b", nn.initializers.zeros, (self.rank, self.features))
         effective_w = w + lora_a @ lora_b
         return jnp.dot(x, effective_w) + b
+
 
 class MultiHeadAttention(nn.Module):
     num_heads: int
@@ -27,15 +33,24 @@ class MultiHeadAttention(nn.Module):
         q_proj = LoRALinear(self.d_model)(query)
         k_proj = LoRALinear(self.d_model)(key)
         v_proj = LoRALinear(self.d_model)(value)
-        q = q_proj.reshape(q_proj.shape[:-1] + (self.num_heads, d_k)).transpose(0, 2, 1, 3)
-        k = k_proj.reshape(k_proj.shape[:-1] + (self.num_heads, d_k)).transpose(0, 2, 1, 3)
-        v = v_proj.reshape(v_proj.shape[:-1] + (self.num_heads, d_k)).transpose(0, 2, 1, 3)
+        q = q_proj.reshape(q_proj.shape[:-1] + (self.num_heads, d_k)).transpose(
+            0, 2, 1, 3
+        )
+        k = k_proj.reshape(k_proj.shape[:-1] + (self.num_heads, d_k)).transpose(
+            0, 2, 1, 3
+        )
+        v = v_proj.reshape(v_proj.shape[:-1] + (self.num_heads, d_k)).transpose(
+            0, 2, 1, 3
+        )
         scores = jnp.matmul(q, k.transpose(0, 1, 3, 2)) / jnp.sqrt(d_k)
         attn_weights = nn.softmax(scores, axis=-1)
         attn_output = jnp.matmul(attn_weights, v)
-        attn_output = attn_output.transpose(0, 2, 1, 3).reshape(attn_output.shape[0], -1, self.d_model)
+        attn_output = attn_output.transpose(0, 2, 1, 3).reshape(
+            attn_output.shape[0], -1, self.d_model
+        )
         output = LoRALinear(self.d_model)(attn_output)
         return output
+
 
 class TransformerBlock(nn.Module):
     d_model: int
@@ -53,6 +68,7 @@ class TransformerBlock(nn.Module):
         x = x + ff_out
         x = nn.LayerNorm()(x)
         return x
+
 
 class SmallModel(nn.Module):
     vocab_size: int
@@ -73,16 +89,20 @@ class SmallModel(nn.Module):
         x = LoRALinear(self.vocab_size)(x)
         return x
 
+
 def loss_fn(params, model, x, y):
     logits = model.apply(params, x)
     loss = optax.softmax_cross_entropy_with_integer_labels(logits, y)
     return jnp.mean(loss)
 
+
 def train_model(model, vocab_size, seq_len=10, batch_size=32, num_steps=100):
     key = jax.random.PRNGKey(42)
     # Dummy data for training
     x = jax.random.randint(key, (batch_size, seq_len), 0, vocab_size)
-    y = jax.random.randint(jax.random.split(key)[0], (batch_size, seq_len), 0, vocab_size)
+    y = jax.random.randint(
+        jax.random.split(key)[0], (batch_size, seq_len), 0, vocab_size
+    )
     params = model.init(key, x)
     optimizer = optax.adam(1e-3)
     opt_state = optimizer.init(params)
@@ -99,6 +119,7 @@ def train_model(model, vocab_size, seq_len=10, batch_size=32, num_steps=100):
         if i % 10 == 0:
             print(f"Step {i}, Loss: {loss:.4f}")
     return params
+
 
 def predict_next(model, params, input_seq):
     logits = model.apply(params, input_seq)

@@ -1,14 +1,14 @@
-import os
-import requests
-import json
 import argparse
-from tokenizers import CharBPETokenizer
-from ..config.config import ModelConfig, TrainingConfig, DataConfig, CloudConfig
-from .trainer import Trainer
-from ..models.model import ProductionTransformer
-from ..utils.utils import load_tokenizer
+import json
+
 import jax
 import jax.numpy as jnp
+import requests
+from tokenizers import CharBPETokenizer
+
+from ..config.config import CloudConfig, ModelConfig, TrainingConfig
+from .trainer import Trainer
+
 
 # Download Tiny Shakespeare dataset
 def download_tiny_shakespeare():
@@ -18,12 +18,19 @@ def download_tiny_shakespeare():
         f.write(response.text)
     return "tiny_shakespeare.txt"
 
+
 # Train character-level tokenizer
 def train_char_tokenizer(file_path):
     tokenizer = CharBPETokenizer()
-    tokenizer.train([file_path], vocab_size=256, min_frequency=2, special_tokens=["<pad>", "<unk>", "<bos>", "<eos>"])
+    tokenizer.train(
+        [file_path],
+        vocab_size=256,
+        min_frequency=2,
+        special_tokens=["<pad>", "<unk>", "<bos>", "<eos>"],
+    )
     tokenizer.save("char_tokenizer.json")
     return tokenizer
+
 
 # Prepare data for training
 def prepare_data(tokenizer, file_path, seq_len=100):
@@ -34,9 +41,10 @@ def prepare_data(tokenizer, file_path, seq_len=100):
     inputs = []
     targets = []
     for i in range(0, len(tokens) - seq_len, seq_len):
-        inputs.append(tokens[i:i+seq_len])
-        targets.append(tokens[i+1:i+seq_len+1])
+        inputs.append(tokens[i : i + seq_len])
+        targets.append(tokens[i + 1 : i + seq_len + 1])
     return inputs, targets
+
 
 # Main training function
 def main(args):
@@ -61,7 +69,7 @@ def main(args):
         dropout_rate=0.1,
         activation="gelu",
         use_lora=False,
-        lora_rank=8
+        lora_rank=8,
     )
 
     # Cloud config (if provided)
@@ -73,7 +81,7 @@ def main(args):
             region=args.cloud_region,
             prefix=args.cloud_prefix,
             sas_token=args.azure_sas_token,
-            account_name=args.azure_account_name
+            account_name=args.azure_account_name,
         )
 
     # Training config
@@ -89,7 +97,7 @@ def main(args):
         eval_steps=1,
         log_steps=10,
         timeout_seconds=args.timeout,
-        cloud_config=cloud_config
+        cloud_config=cloud_config,
     )
 
     # Trainer
@@ -111,8 +119,10 @@ def main(args):
         def get_batch(self, batch_size):
             if self.index + batch_size > len(self.inputs):
                 self.index = 0
-            batch_inputs = jnp.array(self.inputs[self.index:self.index+batch_size])
-            batch_targets = jnp.array(self.targets[self.index:self.index+batch_size])
+            batch_inputs = jnp.array(self.inputs[self.index : self.index + batch_size])
+            batch_targets = jnp.array(
+                self.targets[self.index : self.index + batch_size]
+            )
             self.index += batch_size
             return {"input_ids": batch_inputs, "labels": batch_targets}
 
@@ -134,32 +144,61 @@ def main(args):
             json.dump(model_config.dict(), f)
         print("Training completed! Model saved to 'trained_model'")
 
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Train Tiny Shakespeare Transformer")
 
     # Timeout and cloud options
-    parser.add_argument("--timeout", type=int, default=None,
-                       help="Training timeout in seconds")
-    parser.add_argument("--resume-from", type=str, default=None,
-                       help="Resume training from checkpoint (local path or cloud URL)")
+    parser.add_argument(
+        "--timeout", type=int, default=None, help="Training timeout in seconds"
+    )
+    parser.add_argument(
+        "--resume-from",
+        type=str,
+        default=None,
+        help="Resume training from checkpoint (local path or cloud URL)",
+    )
 
     # Cloud storage options
-    parser.add_argument("--cloud-provider", type=str, choices=["s3", "gcs", "azure"],
-                       default="s3", help="Cloud storage provider")
-    parser.add_argument("--cloud-bucket", type=str, default=None,
-                       help="Cloud bucket/container name")
-    parser.add_argument("--cloud-region", type=str, default=None,
-                       help="Cloud region (AWS region or Azure region)")
-    parser.add_argument("--cloud-prefix", type=str, default="checkpoints",
-                       help="Prefix for checkpoint files in cloud storage")
+    parser.add_argument(
+        "--cloud-provider",
+        type=str,
+        choices=["s3", "gcs", "azure"],
+        default="s3",
+        help="Cloud storage provider",
+    )
+    parser.add_argument(
+        "--cloud-bucket", type=str, default=None, help="Cloud bucket/container name"
+    )
+    parser.add_argument(
+        "--cloud-region",
+        type=str,
+        default=None,
+        help="Cloud region (AWS region or Azure region)",
+    )
+    parser.add_argument(
+        "--cloud-prefix",
+        type=str,
+        default="checkpoints",
+        help="Prefix for checkpoint files in cloud storage",
+    )
 
     # Azure specific options
-    parser.add_argument("--azure-sas-token", type=str, default=None,
-                       help="Azure SAS token for authentication")
-    parser.add_argument("--azure-account-name", type=str, default=None,
-                       help="Azure storage account name")
+    parser.add_argument(
+        "--azure-sas-token",
+        type=str,
+        default=None,
+        help="Azure SAS token for authentication",
+    )
+    parser.add_argument(
+        "--azure-account-name",
+        type=str,
+        default=None,
+        help="Azure storage account name",
+    )
 
     return parser.parse_args()
+
 
 if __name__ == "__main__":
     args = parse_args()

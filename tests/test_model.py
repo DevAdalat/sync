@@ -1,8 +1,9 @@
-import pytest
 import jax
 import jax.numpy as jnp
-from src.models.model import ProductionTransformer, LoRALinear
+
 from src.config.config import ModelConfig
+from src.models.model import LoRALinear, ProductionTransformer
+
 
 def test_lora_linear():
     model = LoRALinear(features=10, rank=5)
@@ -11,8 +12,11 @@ def test_lora_linear():
     output = model.apply(params, x)
     assert output.shape == (2, 10)
 
+
 def test_production_transformer():
-    config = ModelConfig(vocab_size=100, d_model=32, num_heads=2, num_layers=1, d_ff=64, max_len=50)
+    config = ModelConfig(
+        vocab_size=100, d_model=32, num_heads=2, num_layers=1, d_ff=64, max_len=50
+    )
     model = ProductionTransformer(config)
     x = jnp.ones((1, 10), dtype=jnp.int32)
     params = model.init(jax.random.PRNGKey(0), x)
