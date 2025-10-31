@@ -183,11 +183,12 @@ class HFDatasetLoader:
         stride: Optional[int] = None,
         max_examples: Optional[int] = None,
         num_workers: Optional[int] = None,
-        use_gpu: bool = True
+        use_gpu: bool = True,
+        memory_efficient: bool = True
     ) -> tuple:
         """
         Prepare input and target sequences for language modeling.
-        Optimized with multithreading (CPU) and GPU acceleration.
+        Optimized with multithreading (CPU), GPU acceleration, and memory efficiency.
         
         Args:
             tokenizer: Tokenizer object or path to tokenizer file
@@ -196,6 +197,7 @@ class HFDatasetLoader:
             max_examples: Maximum number of examples to process (None for all)
             num_workers: Number of threads for tokenization (default: CPU count)
             use_gpu: Whether to use GPU for sequence creation (default: True)
+            memory_efficient: Use memory-efficient streaming approach (default: True)
         
         Returns:
             Tuple of (inputs, targets) as JAX arrays or lists
@@ -207,13 +209,136 @@ class HFDatasetLoader:
         if stride is None:
             stride = seq_len
         
+        logger.info(f"Preparing sequences (seq_len={seq_len}, stride={stride})")
+        logger.info(f"Memory efficient: {memory_efficient}, GPU: {use_gpu}")
+        
+        if memory_efficient:
+            return self._prepare_sequences_memory_efficient(
+                tokenizer, seq_len, stride, max_examples, use_gpu
+            )
+        else:
+            return self._prepare_sequences_original(
+                tokenizer, seq_len, stride, max_examples, num_workers, use_gpu
+            )
+    
+    def _prepare_sequences_memory_efficient(
+        self,
+        tokenizer: Tokenizer,
+        seq_len: int,
+        stride: int,
+        max_examples: Optional[int],
+        use_gpu: bool
+    ) -> tuple:
+        """
+        Memory-efficient sequence preparation using streaming approach.
+        Avoids the 34x memory blowup by never loading all data at once.
+        """
+        logger.info("Using memory-efficient streaming approach...")
+        
+        # First pass: count total tokens (streaming)
+        logger.info("Counting total tokens...")
+        token_stream = self._stream_tokens(tokenizer, max_examples)
+        total_tokens = sum(1 for _ in token_stream)
+        logger.info(f"Total tokens: {total_tokens}")
+        
+        # Calculate number of sequences
+        num_sequences = (total_tokens - seq_len) // stride + 1
+        logger.info(f"Will create {num_sequences} sequences")
+        
+        # Pre-allocate arrays (this is the only memory we need!)
+        if use_gpu:
+            inputs = jnp.zeros((num_sequences, seq_len), dtype=jnp.int32)
+            targets = jnp.zeros((num_sequences, seq_len), dtype=jnp.int32)
+        else:
+            inputs = np.zeros((num_sequences, seq_len), dtype=np.int32)
+            targets = np.zeros((num_sequences, seq_len), dtype=np.int32)
+        
+        # Second pass: fill arrays with sequences (streaming)
+        logger.info("Creating sequences (streaming)...")
+        token_stream = self._stream_tokens(tokenizer, max_examples)
+        
+        # Buffer for sliding window
+        token_buffer = []
+        seq_idx = 0
+        
+        for token in token_stream:
+            token_buffer.append(token)
+            
+            # Keep buffer size manageable
+            if len(token_buffer) > seq_len + stride:
+                token_buffer = token_buffer[-(seq_len + stride):]
+            
+            # Create sequences when we have enough tokens
+            while len(token_buffer) >= seq_len + 1:
+                # Extract input and target sequences
+                input_seq = token_buffer[:seq_len]
+                target_seq = token_buffer[1:seq_len + 1]
+                
+                # Store in arrays
+                if use_gpu:
+                    inputs = inputs.at[seq_idx].set(jnp.array(input_seq, dtype=jnp.int32))
+                    targets = targets.at[seq_idx].set(jnp.array(target_seq, dtype=jnp.int32))
+                else:
+                    inputs[seq_idx] = input_seq
+                    targets[seq_idx] = target_seq
+                
+                seq_idx += 1
+                
+                # Move window forward
+                token_buffer = token_buffer[stride:]
+                
+                # Progress reporting and cleanup
+                if seq_idx % 10000 == 0:
+                    logger.info(f"Created {seq_idx}/{num_sequences} sequences...")
+                    import gc
+                    gc.collect()
+        
+        logger.info(f"Successfully created {seq_idx} sequences")
+        
+        # Trim arrays if we created fewer than expected
+        if seq_idx < num_sequences:
+            inputs = inputs[:seq_idx]
+            targets = targets[:seq_idx]
+        
+        return inputs, targets
+    
+    def _stream_tokens(self, tokenizer: Tokenizer, max_examples: Optional[int]):
+        """Stream tokens one by one (memory efficient)."""
+        count = 0
+        for example in self.dataset:
+            if max_examples and count >= max_examples:
+                break
+            
+            text = example[self.text_column]
+            if text and len(text.strip()) > 0:
+                # Tokenize and yield tokens one by one
+                tokens = tokenizer.encode(text).ids
+                for token in tokens:
+                    yield token
+            
+            count += 1
+            if count % 1000 == 0:
+                logger.info(f"Processed {count} examples...")
+    
+    def _prepare_sequences_original(
+        self,
+        tokenizer: Tokenizer,
+        seq_len: int,
+        stride: int,
+        max_examples: Optional[int],
+        num_workers: Optional[int],
+        use_gpu: bool
+    ) -> tuple:
+        """
+        Original sequence preparation method (memory intensive).
+        Kept for backward compatibility and comparison.
+        """
         if num_workers is None:
             num_workers = max(1, multiprocessing.cpu_count() - 1)
         
-        logger.info(f"Preparing sequences (seq_len={seq_len}, stride={stride})")
-        logger.info(f"Using {num_workers} threads for tokenization, GPU: {use_gpu}")
+        logger.info(f"Using original method with {num_workers} threads, GPU: {use_gpu}")
         
-        # Get text data
+        # Get text data (loads all texts into memory)
         texts = self.get_text_data(max_examples=max_examples)
         
         # Parallel tokenization using multithreading
@@ -261,22 +386,24 @@ class HFDatasetLoader:
         return inputs, targets
     
     def _create_sequences_cpu(self, all_tokens: List[int], seq_len: int, stride: int) -> tuple:
-        """Create sequences using CPU (fast for small datasets)"""
-        inputs = []
-        targets = []
+        """Create sequences using CPU (memory efficient - no duplication)"""
+        # Calculate number of sequences
+        num_sequences = (len(all_tokens) - seq_len) // stride + 1
         
-        for i in range(0, len(all_tokens) - seq_len, stride):
-            input_seq = all_tokens[i:i + seq_len]
-            target_seq = all_tokens[i + 1:i + seq_len + 1]
-            
-            if len(input_seq) == seq_len and len(target_seq) == seq_len:
-                inputs.append(input_seq)
-                targets.append(target_seq)
+        # Pre-allocate arrays (NO duplication!)
+        inputs = np.zeros((num_sequences, seq_len), dtype=np.int32)
+        targets = np.zeros((num_sequences, seq_len), dtype=np.int32)
+        
+        # Fill arrays directly (no intermediate lists)
+        for i in range(num_sequences):
+            start_idx = i * stride
+            inputs[i] = all_tokens[start_idx:start_idx + seq_len]
+            targets[i] = all_tokens[start_idx + 1:start_idx + seq_len + 1]
         
         return inputs, targets
     
     def _create_sequences_gpu(self, all_tokens: List[int], seq_len: int, stride: int) -> tuple:
-        """Create sequences using GPU with JAX (fast for large datasets)"""
+        """Create sequences using GPU with JAX (memory efficient - returns JAX arrays)"""
         # Convert to JAX array
         tokens_array = jnp.array(all_tokens, dtype=jnp.int32)
         
@@ -298,11 +425,7 @@ class HFDatasetLoader:
         inputs = jax.vmap(extract_input_seq)(start_indices)
         targets = jax.vmap(extract_target_seq)(start_indices)
         
-        # Convert to lists for compatibility with existing code
-        # (or keep as JAX arrays if downstream code supports it)
-        inputs = inputs.tolist()
-        targets = targets.tolist()
-        
+        # Return JAX arrays directly (no memory-wasting list conversion)
         return inputs, targets
     
     def prepare_sequences_fast(
