@@ -14,6 +14,7 @@ from datasets import load_dataset
 from typing import Optional, List, Union, Iterator, Generator
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 import numpy as np
@@ -94,6 +95,7 @@ class MemoryEfficientDatasetLoader:
             count += 1
             if count % 100 == 0:
                 logger.info(f"Tokenizing: {count} examples processed...")
+                sys.stdout.flush()  # Force real-time output
                 gc.collect()  # Force garbage collection
     
     def prepare_sequences_memory_efficient(
@@ -184,6 +186,7 @@ class MemoryEfficientDatasetLoader:
                 if seq_idx % 1000 == 0 or seq_idx == num_sequences - 1:
                     percent_done = (seq_idx / num_sequences) * 100
                     logger.info(f"Progress: {percent_done:.1f}% ({seq_idx}/{num_sequences} sequences)")
+                    sys.stdout.flush()  # Force real-time output
                     gc.collect()
         
         logger.info(f"Successfully created {seq_idx} sequences")

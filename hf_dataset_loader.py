@@ -14,6 +14,7 @@ from datasets import load_dataset
 from typing import Optional, List, Union
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers
 import logging
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import multiprocessing
 import numpy as np
@@ -291,6 +292,7 @@ class HFDatasetLoader:
                 if seq_idx % 1000 == 0 or seq_idx == num_sequences - 1:
                     percent_done = (seq_idx / num_sequences) * 100
                     logger.info(f"Progress: {percent_done:.1f}% ({seq_idx}/{num_sequences} sequences)")
+                    sys.stdout.flush()  # Force real-time output
                     import gc
                     gc.collect()
         
@@ -320,6 +322,7 @@ class HFDatasetLoader:
             count += 1
             if count % 100 == 0:
                 logger.info(f"Tokenizing: {count} examples processed...")
+                sys.stdout.flush()  # Force real-time output
     
     def _prepare_sequences_original(
         self,

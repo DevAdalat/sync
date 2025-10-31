@@ -16,7 +16,9 @@ Usage examples:
 
 import argparse
 import json
+import logging
 import os
+import sys
 import time
 import jax
 import jax.numpy as jnp
@@ -27,6 +29,14 @@ from tokenizers import Tokenizer
 from model import ProductionTransformer
 from model_sizing import create_model_from_params
 from hf_dataset_loader import HFDatasetLoader
+
+# Configure logging for real-time output
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    stream=sys.stdout,
+    force=True
+)
 
 try:
     from streaming_data_loader import StreamingDataLoader
@@ -170,9 +180,9 @@ def train_model(
         Dictionary with training results
     """
     
-    print("\n" + "="*80)
-    print(" MODEL TRAINING".center(80))
-    print("="*80)
+    print("\n" + "="*80, flush=True)
+    print(" MODEL TRAINING".center(80), flush=True)
+    print("="*80, flush=True)
     
     # ========================================================================
     # Step 0: Detect and Setup Device (TPU/GPU/CPU)
@@ -182,9 +192,9 @@ def train_model(
     # ========================================================================
     # Step 1: Load Dataset
     # ========================================================================
-    print(f"\n{'='*80}")
-    print("STEP 1: LOADING DATASET")
-    print("="*80)
+    print(f"\n{'='*80}", flush=True)
+    print("STEP 1: LOADING DATASET", flush=True)
+    print("="*80, flush=True)
     print(f"Dataset ID:    {dataset_id}")
     if dataset_config:
         print(f"Config:        {dataset_config}")
@@ -260,12 +270,15 @@ def train_model(
     # ========================================================================
     # Step 4: Prepare Training Data
     # ========================================================================
-    print(f"\n{'='*80}")
-    print("STEP 4: PREPARING TRAINING DATA")
-    print("="*80)
-    print(f"Sequence length: {seq_len}")
-    print(f"Stride:          {stride if stride else seq_len} (no overlap)" if not stride else f"{stride}")
-    print(f"Max examples:    {max_examples if max_examples else 'all'}")
+    print(f"\n{'='*80}", flush=True)
+    print("STEP 4: PREPARING TRAINING DATA", flush=True)
+    print("="*80, flush=True)
+    print(f"Sequence length: {seq_len}", flush=True)
+    print(f"Stride:          {stride if stride else seq_len} (no overlap)" if not stride else f"{stride}", flush=True)
+    print(f"Max examples:    {max_examples if max_examples else 'all'}", flush=True)
+    
+    # Force flush before prepare_sequences to ensure real-time logging
+    sys.stdout.flush()
     
     inputs, targets = dataset_loader.prepare_sequences(
         tokenizer=tokenizer,
@@ -273,6 +286,9 @@ def train_model(
         stride=stride,
         max_examples=max_examples
     )
+    
+    # Force flush after prepare_sequences
+    sys.stdout.flush()
     
     # Convert to JAX arrays
     inputs = jnp.array(inputs, dtype=jnp.int32)
