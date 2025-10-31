@@ -6,8 +6,8 @@ This demonstrates how to use the Azure SAS token authentication.
 
 import os
 import tempfile
-from config import CloudConfig
-from utils import upload_checkpoint_to_cloud, download_checkpoint_from_cloud
+from src.config.config import CloudConfig
+from src.utils.utils import upload_checkpoint_to_cloud, download_checkpoint_from_cloud
 
 def test_azure_sas():
     """Test Azure SAS upload/download functionality."""

@@ -1,10 +1,10 @@
 import jax
 import jax.numpy as jnp
 import json
-from config import ModelConfig
-from model import ProductionTransformer
-from utils import load_tokenizer, tokenize_text, detokenize_text
-from trainer import Trainer
+from src.config.config import ModelConfig
+from src.models.model import ProductionTransformer
+from src.utils.utils import load_tokenizer, tokenize_text, detokenize_text
+from src.training.trainer import Trainer
 import argparse
 
 def generate_text(model, params, tokenizer, prompt, max_len=100, temperature=1.0, use_multi_device=False):

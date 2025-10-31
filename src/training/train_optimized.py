@@ -23,10 +23,10 @@ from flax.training import train_state
 from tokenizers import Tokenizer
 from typing import Optional
 
-from model import ProductionTransformer
-from model_sizing import create_model_from_params
-from streaming_data_loader import StreamingDataLoader, estimate_memory_usage
-from hf_dataset_loader import HFDatasetLoader
+from ..models.model import ProductionTransformer
+from ...tests.model_sizing import create_model_from_params
+from ..data.streaming_data_loader import StreamingDataLoader, estimate_memory_usage
+from ..data.hf_dataset_loader import HFDatasetLoader
 
 
 def count_params(params):

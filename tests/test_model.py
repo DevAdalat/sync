@@ -1,8 +1,8 @@
 import pytest
 import jax
 import jax.numpy as jnp
-from model import ProductionTransformer, LoRALinear
-from config import ModelConfig
+from src.models.model import ProductionTransformer, LoRALinear
+from src.config.config import ModelConfig
 
 def test_lora_linear():
     model = LoRALinear(features=10, rank=5)

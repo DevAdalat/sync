@@ -82,7 +82,7 @@ def main():
     print("Usage in your training script:")
     print("="*80)
     print("""
-    from config import ModelConfig
+from src.config.config import ModelConfig
     
     # Instead of manually specifying dimensions:
     # config = ModelConfig(vocab_size=8986, d_model=64, num_layers=92, ...)

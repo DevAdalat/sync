@@ -12,10 +12,10 @@ import argparse
 import json
 import jax
 import jax.numpy as jnp
-from model import ProductionTransformer
-from model_sizing import create_model_from_params
-from hf_dataset_loader import HFDatasetLoader, list_dataset_columns
-from config import TrainingConfig, CloudConfig
+from ..models.model import ProductionTransformer
+from ...tests.model_sizing import create_model_from_params
+from ..data.hf_dataset_loader import HFDatasetLoader, list_dataset_columns
+from ..config.config import TrainingConfig, CloudConfig
 import optax
 from flax.training import train_state
 import time

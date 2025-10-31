@@ -11,9 +11,9 @@ import shutil
 import time
 from datetime import datetime
 from orbax import checkpoint as ocp
-from config import TrainingConfig, DataConfig, ModelConfig
-from model import ProductionTransformer
-from utils import compute_perplexity, compute_accuracy, upload_checkpoint_to_cloud, download_checkpoint_from_cloud
+from ..config.config import TrainingConfig, DataConfig, ModelConfig
+from ..models.model import ProductionTransformer
+from ..utils.utils import compute_perplexity, compute_accuracy, upload_checkpoint_to_cloud, download_checkpoint_from_cloud
 
 logger = logging.getLogger(__name__)
 

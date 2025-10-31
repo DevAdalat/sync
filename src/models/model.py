@@ -3,7 +3,7 @@ import jax.numpy as jnp
 from flax import linen as nn
 from flax.core import FrozenDict
 from typing import Optional, Callable
-from config import ModelConfig
+from ..config.config import ModelConfig
 import math
 
 class RMSNorm(nn.Module):

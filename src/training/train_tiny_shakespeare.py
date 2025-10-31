@@ -3,10 +3,10 @@ import requests
 import json
 import argparse
 from tokenizers import CharBPETokenizer
-from config import ModelConfig, TrainingConfig, DataConfig, CloudConfig
-from trainer import Trainer
-from model import ProductionTransformer
-from utils import load_tokenizer
+from ..config.config import ModelConfig, TrainingConfig, DataConfig, CloudConfig
+from .trainer import Trainer
+from ..models.model import ProductionTransformer
+from ..utils.utils import load_tokenizer
 import jax
 import jax.numpy as jnp
 

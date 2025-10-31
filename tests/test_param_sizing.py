@@ -5,7 +5,7 @@ This script tests 1M, 3M, and 5M parameter models.
 
 import jax
 import jax.numpy as jnp
-from model import ProductionTransformer
+from src.models.model import ProductionTransformer
 from model_sizing import create_model_from_params, calculate_model_params
 import argparse
 

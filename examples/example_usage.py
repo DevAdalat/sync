@@ -4,8 +4,8 @@ Example: Create a model with a specific parameter count
 This script demonstrates how to create transformer models with exact parameter counts.
 """
 
-from model import ProductionTransformer
-from model_sizing import create_model_from_params
+from src.models.model import ProductionTransformer
+from tests.model_sizing import create_model_from_params
 import jax
 import jax.numpy as jnp
 

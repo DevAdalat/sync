@@ -4,7 +4,7 @@ Example: Using Model Presets in Training
 This shows how to use the new preset system in your training scripts.
 """
 
-from config import ModelConfig, TrainingConfig
+from src.config.config import ModelConfig, TrainingConfig
 
 def example_quick_training():
     """Quick training example with nano preset (fastest)."""

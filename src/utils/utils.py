@@ -6,7 +6,7 @@ import os
 import tempfile
 import shutil
 from pathlib import Path
-from config import CloudConfig
+from ..config.config import CloudConfig
 
 logger = logging.getLogger(__name__)
 

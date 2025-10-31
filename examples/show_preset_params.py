@@ -2,7 +2,7 @@
 Calculate exact parameter counts for each model preset.
 """
 
-from config import ModelConfig, MODEL_PRESETS
+from src.config.config import ModelConfig, MODEL_PRESETS
 
 
 def calculate_params(config: ModelConfig) -> int:

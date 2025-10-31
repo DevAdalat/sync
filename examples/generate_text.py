@@ -25,7 +25,7 @@ import jax.numpy as jnp
 from tokenizers import Tokenizer
 from orbax import checkpoint as ocp
 
-from model import ProductionTransformer
+from src.models.model import ProductionTransformer
 
 
 def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None, use_multi_device: bool = True):
@@ -94,7 +94,7 @@ def load_model_and_tokenizer(checkpoint_dir: str, tokenizer_path: str = None, us
     with open(config_path, "r") as f:
         config_dict = json.load(f)
     
-    from config import ModelConfig
+    from src.config.config import ModelConfig
     model_config = ModelConfig(**config_dict)
     
     # Create model
