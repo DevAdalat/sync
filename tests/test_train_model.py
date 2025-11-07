@@ -4,7 +4,13 @@ Quick test script for train_model.py
 Tests the training pipeline with a small model and limited data.
 """
 
-from train_model import train_model
+import sys
+from pathlib import Path
+
+# Add parent directory to path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+from src.training.train_model import train_model
 
 if __name__ == "__main__":
     print("Testing train_model.py with minimal configuration...")

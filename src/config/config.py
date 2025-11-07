@@ -71,6 +71,15 @@ class ModelConfig(BaseModel):
     use_rmsnorm: bool = Field(True, description="Use RMSNorm instead of LayerNorm")
     use_swiglu: bool = Field(True, description="Use SwiGLU activation in FFN")
     use_rope: bool = Field(True, description="Use Rotary Position Embeddings")
+    use_flash_attention: bool = Field(
+        True, description="Use Kvax Flash Attention for efficient attention computation"
+    )
+    flash_attention_query_block_size: Optional[int] = Field(
+        None, description="Flash attention query block size (None for auto)"
+    )
+    flash_attention_kv_block_size: Optional[int] = Field(
+        None, description="Flash attention KV block size (None for auto)"
+    )
 
     @classmethod
     def from_preset(

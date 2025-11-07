@@ -27,7 +27,7 @@ import optax
 from flax.training import train_state
 from tokenizers import Tokenizer
 
-from ...tests.model_sizing import create_model_from_params
+from tests.model_sizing import create_model_from_params
 from ..data.hf_dataset_loader import HFDatasetLoader
 from ..models.model import ProductionTransformer
 

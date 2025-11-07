@@ -17,9 +17,33 @@ A scalable, production-ready transformer model built with JAX and Flax, supporti
 pip install -r requirements.txt
 ```
 
-## Usage
+## Quick Start
 
-### Training
+### Training (Recommended - Just-in-Time Processing)
+
+**The simplest way to train - one command, no pre-processing required:**
+
+```bash
+python -m src.training.train_advanced \
+  --dataset-id "roneneldan/TinyStories" \
+  --model-preset small \
+  --auto-vocab-size \
+  --epochs 5
+```
+
+**Key Features:**
+- ✅ Just-in-time data processing (no pre-processing needed!)
+- ✅ Auto vocabulary size determination
+- ✅ Memory-efficient streaming data loading
+- ✅ Model presets (nano to xlarge)
+- ✅ All features via command-line arguments
+
+**See:** [TRAIN_ADVANCED_QUICK_START.md](TRAIN_ADVANCED_QUICK_START.md) for more examples  
+**Full Guide:** [TRAIN_ADVANCED_GUIDE.md](TRAIN_ADVANCED_GUIDE.md)
+
+---
+
+### Training (Alternative - Programmatic API)
 
 ```python
 from config import ModelConfig, TrainingConfig, DataConfig

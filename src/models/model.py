@@ -1,9 +1,10 @@
-from typing import Callable
+from typing import Callable, Optional
 
 import jax.numpy as jnp
 from flax import linen as nn
 
 from ..config.config import ModelConfig
+from .flash_attention import adaptive_flash_attention, get_flash_attention_config
 
 
 class RMSNorm(nn.Module):
@@ -102,6 +103,7 @@ class MultiHeadAttention(nn.Module):
     dropout_rate: float = 0.1
     causal: bool = True
     use_rope: bool = True
+    use_flash_attention: bool = True
 
     @nn.compact
     def __call__(self, query, key, value, mask=None, deterministic=True):
@@ -130,25 +132,46 @@ class MultiHeadAttention(nn.Module):
             q = apply_rotary_pos_emb(q, cos, sin)
             k = apply_rotary_pos_emb(k, cos, sin)
 
-        # Scaled dot-product attention
-        scores = jnp.matmul(q, k.transpose(0, 1, 3, 2)) / jnp.sqrt(d_k)
+        # Use flash attention or standard attention
+        scale = 1.0 / jnp.sqrt(d_k)
+        
+        if self.use_flash_attention:
+            # Use adaptive flash attention (automatically falls back if needed)
+            # Extract padding mask from input mask if provided
+            padding_mask = None
+            if mask is not None and len(mask.shape) == 2:
+                # Assuming mask is [batch, seq_len] with 1 for valid, 0 for padding
+                padding_mask = mask
+            
+            attn_output = adaptive_flash_attention(
+                query=q,
+                key=k,
+                value=v,
+                scale=scale,
+                causal=self.causal,
+                padding_mask=padding_mask,
+                use_flash_attention=True,
+            )
+        else:
+            # Standard scaled dot-product attention
+            scores = jnp.matmul(q, k.transpose(0, 1, 3, 2)) * scale
 
-        # Apply causal mask
-        if self.causal:
-            seq_len = q.shape[-2]
-            causal_mask = jnp.tril(jnp.ones((seq_len, seq_len)))
-            scores = jnp.where(causal_mask, scores, -1e10)
+            # Apply causal mask
+            if self.causal:
+                seq_len = q.shape[-2]
+                causal_mask = jnp.tril(jnp.ones((seq_len, seq_len)))
+                scores = jnp.where(causal_mask, scores, -1e10)
 
-        if mask is not None:
-            scores = jnp.where(mask, scores, -1e10)
+            if mask is not None:
+                scores = jnp.where(mask, scores, -1e10)
 
-        attn_weights = nn.softmax(scores, axis=-1)
-        attn_weights = nn.Dropout(self.dropout_rate)(
-            attn_weights, deterministic=deterministic
-        )
+            attn_weights = nn.softmax(scores, axis=-1)
+            attn_weights = nn.Dropout(self.dropout_rate)(
+                attn_weights, deterministic=deterministic
+            )
 
-        # Apply attention to values
-        attn_output = jnp.matmul(attn_weights, v)
+            # Apply attention to values
+            attn_output = jnp.matmul(attn_weights, v)
 
         # Reshape back: [batch, num_heads, seq_len, d_k] -> [batch, seq_len, d_model]
         attn_output = attn_output.transpose(0, 2, 1, 3).reshape(
@@ -169,6 +192,7 @@ class TransformerBlock(nn.Module):
     use_rmsnorm: bool = True
     use_swiglu: bool = True
     use_rope: bool = True
+    use_flash_attention: bool = True
 
     @nn.compact
     def __call__(self, x, mask=None, deterministic=True):
@@ -179,7 +203,11 @@ class TransformerBlock(nn.Module):
         residual = x
         x = norm_layer(x)
         attn_out = MultiHeadAttention(
-            self.num_heads, self.d_model, self.dropout_rate, use_rope=self.use_rope
+            self.num_heads,
+            self.d_model,
+            self.dropout_rate,
+            use_rope=self.use_rope,
+            use_flash_attention=self.use_flash_attention,
         )(x, x, x, mask, deterministic)
         x = residual + attn_out
 
@@ -226,6 +254,7 @@ class ProductionTransformer(nn.Module):
         # Transformer blocks
         use_rmsnorm = getattr(self.config, "use_rmsnorm", True)
         use_swiglu = getattr(self.config, "use_swiglu", True)
+        use_flash_attention = getattr(self.config, "use_flash_attention", True)
 
         for _ in range(self.config.num_layers):
             x = TransformerBlock(
@@ -237,6 +266,7 @@ class ProductionTransformer(nn.Module):
                 use_rmsnorm=use_rmsnorm,
                 use_swiglu=use_swiglu,
                 use_rope=use_rope,
+                use_flash_attention=use_flash_attention,
             )(x, mask, deterministic)
 
         # Final normalization
@@ -265,6 +295,7 @@ class ProductionTransformer(nn.Module):
 
         use_rmsnorm = getattr(self.config, "use_rmsnorm", True)
         use_swiglu = getattr(self.config, "use_swiglu", True)
+        use_flash_attention = getattr(self.config, "use_flash_attention", True)
 
         for _ in range(self.config.num_layers):
             x = TransformerBlock(
@@ -276,6 +307,7 @@ class ProductionTransformer(nn.Module):
                 use_rmsnorm=use_rmsnorm,
                 use_swiglu=use_swiglu,
                 use_rope=use_rope,
+                use_flash_attention=use_flash_attention,
             )(x, mask, deterministic)
 
         return x  # embeddings

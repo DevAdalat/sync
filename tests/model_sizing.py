@@ -3,7 +3,7 @@ Model sizing utility to automatically configure model architecture
 to match a target parameter count.
 """
 
-from config import ModelConfig
+from src.config.config import ModelConfig
 
 
 def calculate_model_params(
